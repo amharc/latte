@@ -16,15 +16,18 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Language.Latte.Frontend.AST
-  build-depends:       base >= 4.7 && < 5
+                       Language.Latte.Frontend.Parser
+  build-depends:       base >= 4.9 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0
+                     , parsec >= 3.1 && < 4.0
   default-language:    Haskell2010
+  ghc-options:         -Wall
 
 executable latte-exe
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -Wall
   build-depends:       base
                      , latte
   default-language:    Haskell2010
@@ -35,7 +38,7 @@ test-suite latte-test
   main-is:             Spec.hs
   build-depends:       base
                      , latte
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -Wall
   default-language:    Haskell2010
 
 source-repository head
