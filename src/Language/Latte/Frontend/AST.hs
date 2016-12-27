@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
@@ -170,10 +171,10 @@ instance Pretty Ident where
     pPrint (Ident ident) = text (BS.unpack ident)
 
 instance Pretty Location where
-    pPrint l = pPrint (l ^. locLine) <> text ":" <> pPrint (l ^. locColumn)
+    pPrint l = pPrint (l ^. locLine) <> ":" <> pPrint (l ^. locColumn)
 
 instance Pretty LocRange where
-    pPrint l = pPrint (l ^. locStart) <> text "-" <> pPrint (l ^. locEnd)
+    pPrint l = pPrint (l ^. locStart) <> "-" <> pPrint (l ^. locEnd)
 
 instance Pretty Program where
     pPrint (Program decls) = vcat $ map (views obj pPrint) decls
@@ -190,30 +191,30 @@ instance Pretty FuncDecl where
         (view funcBody decl)
 
 instance Pretty Type where
-    pPrint TyInt = text "int"
-    pPrint TyBool = text "boolean"
-    pPrint TyVoid = text "void"
-    pPrint TyString = text "string"
-    pPrint (TyArray ty) = pPrint ty <> text "[]"
+    pPrint TyInt = "int"
+    pPrint TyBool = "boolean"
+    pPrint TyVoid = "void"
+    pPrint TyString = "string"
+    pPrint (TyArray ty) = pPrint ty <> "[]"
     pPrint (TyClass ident) = pPrint ident
 
 instance Pretty Stmt where
     pPrint (StmtBlock stmts) = blocked empty (vcat $ map (views obj pPrint) stmts)
-    pPrint (StmtReturn Nothing) = text "return;"
-    pPrint (StmtReturn (Just expr)) = text "return" <+> pPrint expr <> semi
-    pPrint (StmtInc lval) = pPrint lval <> text "++" <> semi
-    pPrint (StmtDec lval) = pPrint lval <> text "--" <> semi
+    pPrint (StmtReturn Nothing) = "return;"
+    pPrint (StmtReturn (Just expr)) = "return" <+> pPrint expr <> semi
+    pPrint (StmtInc lval) = pPrint lval <> "++" <> semi
+    pPrint (StmtDec lval) = pPrint lval <> "--" <> semi
     pPrint (StmtIf (Loc cond) (Loc ifTrue) mIfFalse) = ifBranch $+$ elseBranch
       where
-        ifBranch = blockedStmts (text "if" <+> parens (pPrint cond)) ifTrue
+        ifBranch = blockedStmts ("if" <+> parens (pPrint cond)) ifTrue
         elseBranch = case mIfFalse of
             Nothing -> empty
-            Just (Loc ifFalse) -> blockedStmts (text "else") ifFalse
+            Just (Loc ifFalse) -> blockedStmts ("else") ifFalse
     pPrint (StmtWhile (Loc cond) (Loc body)) = blockedStmts
-        (text "while" <+> parens (pPrint cond))
+        ("while" <+> parens (pPrint cond))
         body
     pPrint (StmtFor ty name (Loc expr) (Loc body)) = blockedStmts
-        (text "for" <+> parens (pPrint ty <+> pPrint name <+> colon <+> pPrint expr))
+        ("for" <+> parens (pPrint ty <+> pPrint name <+> colon <+> pPrint expr))
         body
     pPrint (StmtAssign lval (Loc expr)) = pPrint lval <+> equals <+> pPrint expr <> semi
     pPrint (StmtExpr expr) = pPrint expr <> semi
@@ -224,22 +225,22 @@ instance Pretty Expr where
     pPrintPrec _ _ (ExprLval lval) = pPrint lval
     pPrintPrec _ _ (ExprInt i) = int i
     pPrintPrec _ _ (ExprString str) = doubleQuotes . text $ BS.unpack str
-    pPrintPrec _ _ ExprTrue = text "true"
-    pPrintPrec _ _ ExprFalse = text "false"
-    pPrintPrec _ _ ExprNull = text "null"
+    pPrintPrec _ _ ExprTrue = "true"
+    pPrintPrec _ _ ExprFalse = "false"
+    pPrintPrec _ _ ExprNull = "null"
     pPrintPrec _ _ (ExprCast ty (Loc ex)) = parens (pPrint ty) <+> pPrint ex
-    pPrintPrec _ _ (ExprNew ty) = text "new" <+> pPrint ty
-    pPrintPrec _ _ (ExprNewArr ty (Loc expr)) = text "new" <+> pPrint ty <> brackets (pPrint expr)
+    pPrintPrec _ _ (ExprNew ty) = "new" <+> pPrint ty
+    pPrintPrec _ _ (ExprNewArr ty (Loc expr)) = "new" <+> pPrint ty <> brackets (pPrint expr)
     pPrintPrec _ _ (ExprCall ident args) = pPrint ident 
         <> parens (cat . punctuate comma $ map (views obj pPrint) args)
-    pPrintPrec _ _ (ExprUnOp oper (Loc expr)) = text op' <> pPrint expr
+    pPrintPrec _ _ (ExprUnOp oper (Loc expr)) = op' <> pPrint expr
         where
             op' = case oper of
                 UnOpNeg -> "-"
                 UnOpNot -> "!"
     pPrintPrec l r (ExprBinOp (Loc lhs) oper (Loc rhs)) = maybeParens (r >= precLeft) $ sep
         [ pPrintPrec l precLeft lhs
-        , text op'
+        , op'
         , pPrintPrec l precRight rhs
         ]
       where
@@ -273,7 +274,7 @@ instance Pretty Lval where
     pPrintPrec l _ (LvalArray (Loc arr) (Loc idx)) =
         pPrintPrec l 8 arr <> brackets (pPrint idx)
     pPrintPrec l _ (LvalField (Loc object) field) =
-        pPrintPrec l 8 object <> text "." <> pPrint field
+        pPrintPrec l 8 object <> "." <> pPrint field
 
 instance Pretty LocalDecl where
     pPrint decl = pPrint (decl ^. localDeclType) 
@@ -286,11 +287,11 @@ instance Pretty LocalDeclItem where
 
 instance Pretty ClassDecl where
     pPrint (ClassDecl name base members) = blocked 
-        (sep [ text "class"
+        (sep [ "class"
              , pPrint name
              , case base of
                 Nothing -> empty
-                Just b -> text "extends" <+> pPrint b
+                Just b -> "extends" <+> pPrint b
              ])
         (vcat $ map (views obj pPrint) members)
 

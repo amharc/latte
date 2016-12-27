@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Language.Latte.Frontend.AST
                        Language.Latte.Frontend.Parser
+                       Language.Latte.Middleend.IR
   build-depends:       base >= 4.9 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0
