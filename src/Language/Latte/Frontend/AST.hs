@@ -1,10 +1,14 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
 module Language.Latte.Frontend.AST where
 
 import Control.Lens
-import Data.Semigroup
+import qualified Data.Semigroup as Semi
 import qualified Data.ByteString.Char8 as BS
+import Text.PrettyPrint
+import Text.PrettyPrint.HughesPJClass
 
 data Location = Location
     { _locLine :: {-# UNPACK #-} !Int
@@ -23,6 +27,9 @@ data Located a = Located
     , _obj :: !a
     }
     deriving (Eq, Show, Functor)
+
+pattern Loc :: a -> Located a
+pattern Loc obj <- Located _ obj
 
 newtype Program = Program { getProgram :: [Located TopLevelDecl] }
     deriving Show
@@ -59,6 +66,7 @@ data Stmt
     | StmtDec !Lval
     | StmtIf !(Located Expr) !(Located Stmt) !(Maybe (Located Stmt))
     | StmtWhile !(Located Expr) !(Located Stmt)
+    | StmtFor !Type !Ident !(Located Expr) !(Located Stmt)
     | StmtAssign !Lval !(Located Expr)
     | StmtExpr !Expr
     | StmtDecl !LocalDecl
@@ -72,11 +80,12 @@ data Expr
     | ExprTrue
     | ExprFalse
     | ExprNull
-    | ExprCall !Ident [Located Expr]
+    | ExprCall !Lval [Located Expr]
     | ExprUnOp !UnOp !(Located Expr)
     | ExprBinOp !(Located Expr) !BinOp !(Located Expr)
-    | ExprNew !Ident
-    | ExprNewArr !Ident !(Located Expr)
+    | ExprNew !Type
+    | ExprNewArr !Type !(Located Expr)
+    | ExprCast !Type !(Located Expr)
     deriving Show
 
 data UnOp
@@ -102,7 +111,7 @@ data BinOp
 
 data LocalDecl = LocalDecl
     { _localDeclType :: !Type
-    , _localDeclItems :: [LocalDeclItem]
+    , _localDeclItems :: [Located LocalDeclItem]
     }
     deriving Show
 
@@ -127,9 +136,13 @@ data FunArg = FunArg
 data ClassDecl = ClassDecl
     { _className :: !Ident
     , _classBase :: !(Maybe Ident)
-    , _classFields :: [Located ClassField]
-    , _classMethods :: [Located FuncDecl]
+    , _classMembers :: [Located ClassMember]
     }
+    deriving Show
+
+data ClassMember
+    = ClassMemberField !ClassField
+    | ClassMemberMethod !FuncDecl
     deriving Show
 
 data ClassField = ClassField
@@ -148,7 +161,152 @@ makeLenses ''FunArg
 makeLenses ''ClassDecl
 makeLenses ''ClassField
 
-instance Semigroup LocRange where
+instance Semi.Semigroup LocRange where
     lhs <> rhs = LocRange
         (min (lhs ^. locStart) (rhs ^. locStart))
         (max (lhs ^. locStart) (rhs ^. locStart))
+
+instance Pretty Ident where
+    pPrint (Ident ident) = text (BS.unpack ident)
+
+instance Pretty Location where
+    pPrint l = pPrint (l ^. locLine) <> text ":" <> pPrint (l ^. locColumn)
+
+instance Pretty LocRange where
+    pPrint l = pPrint (l ^. locStart) <> text "-" <> pPrint (l ^. locEnd)
+
+instance Pretty Program where
+    pPrint (Program decls) = vcat $ map (views obj pPrint) decls
+
+instance Pretty TopLevelDecl where
+    pPrint (TLDFunc decl) = pPrint decl
+    pPrint (TLDClass decl) = pPrint decl
+
+instance Pretty FuncDecl where
+    pPrint decl = blockedStmts
+        (pPrint (decl ^. funcRetType) 
+          <+> pPrint (decl ^. funcName)
+          <>  parens (sep . punctuate comma $ map pPrint (decl ^. funcArgs)))
+        (view funcBody decl)
+
+instance Pretty Type where
+    pPrint TyInt = text "int"
+    pPrint TyBool = text "boolean"
+    pPrint TyVoid = text "void"
+    pPrint TyString = text "string"
+    pPrint (TyArray ty) = pPrint ty <> text "[]"
+    pPrint (TyClass ident) = pPrint ident
+
+instance Pretty Stmt where
+    pPrint (StmtBlock stmts) = blocked empty (vcat $ map (views obj pPrint) stmts)
+    pPrint (StmtReturn Nothing) = text "return;"
+    pPrint (StmtReturn (Just expr)) = text "return" <+> pPrint expr <> semi
+    pPrint (StmtInc lval) = pPrint lval <> text "++" <> semi
+    pPrint (StmtDec lval) = pPrint lval <> text "--" <> semi
+    pPrint (StmtIf (Loc cond) (Loc ifTrue) mIfFalse) = ifBranch $+$ elseBranch
+      where
+        ifBranch = blockedStmts (text "if" <+> parens (pPrint cond)) ifTrue
+        elseBranch = case mIfFalse of
+            Nothing -> empty
+            Just (Loc ifFalse) -> blockedStmts (text "else") ifFalse
+    pPrint (StmtWhile (Loc cond) (Loc body)) = blockedStmts
+        (text "while" <+> parens (pPrint cond))
+        body
+    pPrint (StmtFor ty name (Loc expr) (Loc body)) = blockedStmts
+        (text "for" <+> parens (pPrint ty <+> pPrint name <+> colon <+> pPrint expr))
+        body
+    pPrint (StmtAssign lval (Loc expr)) = pPrint lval <+> equals <+> pPrint expr <> semi
+    pPrint (StmtExpr expr) = pPrint expr <> semi
+    pPrint (StmtDecl decl) = pPrint decl <> semi
+    pPrint StmtNone = semi
+
+instance Pretty Expr where
+    pPrintPrec _ _ (ExprLval lval) = pPrint lval
+    pPrintPrec _ _ (ExprInt i) = int i
+    pPrintPrec _ _ (ExprString str) = doubleQuotes . text $ BS.unpack str
+    pPrintPrec _ _ ExprTrue = text "true"
+    pPrintPrec _ _ ExprFalse = text "false"
+    pPrintPrec _ _ ExprNull = text "null"
+    pPrintPrec _ _ (ExprCast ty (Loc ex)) = parens (pPrint ty) <+> pPrint ex
+    pPrintPrec _ _ (ExprNew ty) = text "new" <+> pPrint ty
+    pPrintPrec _ _ (ExprNewArr ty (Loc expr)) = text "new" <+> pPrint ty <> brackets (pPrint expr)
+    pPrintPrec _ _ (ExprCall ident args) = pPrint ident 
+        <> parens (cat . punctuate comma $ map (views obj pPrint) args)
+    pPrintPrec _ _ (ExprUnOp oper (Loc expr)) = text op' <> pPrint expr
+        where
+            op' = case oper of
+                UnOpNeg -> "-"
+                UnOpNot -> "!"
+    pPrintPrec l r (ExprBinOp (Loc lhs) oper (Loc rhs)) = maybeParens (r >= precLeft) $ sep
+        [ pPrintPrec l precLeft lhs
+        , text op'
+        , pPrintPrec l precRight rhs
+        ]
+      where
+        (precLeft, op', precRight) = case oper of
+            BinOpPlus -> (addPrec, "+", addPrec - eps)
+            BinOpMinus -> (addPrec, "-", addPrec - eps)
+            BinOpTimes -> (mulPrec, "*", mulPrec - eps)
+            BinOpDivide -> (mulPrec, "/", mulPrec - eps)
+            BinOpModulo -> (mulPrec, "%", mulPrec - eps)
+            BinOpLess -> (relPrec, "<", relPrec)
+            BinOpLessEqual -> (relPrec, "<=", relPrec)
+            BinOpGreater -> (relPrec, ">", relPrec)
+            BinOpGreaterEqual -> (relPrec, ">=", relPrec)
+            BinOpEqual -> (relPrec, "==", relPrec)
+            BinOpNotEqual -> (relPrec, "!=", relPrec)
+            BinOpAnd -> (logPrec, "&&", logPrec - eps)
+            BinOpOr -> (logPrec, "||", logPrec - eps)
+
+        eps = 1 / 10000
+
+        addPrec = 5
+        mulPrec = 4
+        relPrec = 6
+        logPrec = 7
+
+instance Pretty FunArg where
+    pPrint f = pPrint (f ^. funArgType) <+> pPrint (f ^. funArgName)
+
+instance Pretty Lval where
+    pPrintPrec _ _ (LvalVar ident) = pPrint ident
+    pPrintPrec l _ (LvalArray (Loc arr) (Loc idx)) =
+        pPrintPrec l 8 arr <> brackets (pPrint idx)
+    pPrintPrec l _ (LvalField (Loc object) field) =
+        pPrintPrec l 8 object <> text "." <> pPrint field
+
+instance Pretty LocalDecl where
+    pPrint decl = pPrint (decl ^. localDeclType) 
+        <+> (sep . punctuate comma $ map (views obj pPrint) (decl ^. localDeclItems))
+
+instance Pretty LocalDeclItem where
+    pPrint (LocalDeclItem name Nothing) = pPrint name
+    pPrint (LocalDeclItem name (Just (Loc initializer))) =
+        pPrint name <+> equals <+> pPrint initializer
+
+instance Pretty ClassDecl where
+    pPrint (ClassDecl name base members) = blocked 
+        (sep [ text "class"
+             , pPrint name
+             , case base of
+                Nothing -> empty
+                Just b -> text "extends" <+> pPrint b
+             ])
+        (vcat $ map (views obj pPrint) members)
+
+instance Pretty ClassMember where
+    pPrint (ClassMemberField field) = pPrint field
+    pPrint (ClassMemberMethod method) = pPrint method
+
+instance Pretty ClassField where
+    pPrint (ClassField ty name) = pPrint ty <+> pPrint name <> semi
+
+pretty :: Pretty a => a -> String
+pretty = render . pPrint
+
+blocked :: Doc -> Doc -> Doc
+blocked header body = (header <+> lbrace) $+$ nest 4 body $+$ rbrace
+
+blockedStmts :: Doc -> Stmt -> Doc
+blockedStmts header (StmtBlock stmts) = blocked header (vcat $ views obj pPrint <$> stmts)
+blockedStmts header stmt = blocked header (pPrint stmt)

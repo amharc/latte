@@ -5,7 +5,6 @@ module Language.Latte.Frontend.Parser where
 
 import Control.Lens
 import qualified Data.ByteString.Char8 as BS
-import Data.Either (partitionEithers)
 import Data.Semigroup ((<>))
 import Language.Latte.Frontend.AST
 import Text.Parsec
@@ -18,10 +17,10 @@ latteDef = P.LanguageDef
     { P.commentStart = "/*"
     , P.commentEnd = "*/"
     , P.commentLine = "//"
-    , P.nestedComments = False
+    , P.nestedComments = True
     , P.identStart = letter
     , P.identLetter = alphaNum <|> oneOf "_'"
-    , P.reservedNames = ["int", "void", "boolean", "string", "return", "for", "while", "new", "class", "extends", "null"]
+    , P.reservedNames = ["int", "void", "boolean", "string", "return", "for", "while", "new", "class", "extends", "null", "if", "else"]
     , P.reservedOpNames = ["+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "!", "||", "&&", "="]
     , P.opStart = P.opLetter latteDef
     , P.opLetter = oneOf "+-*/%<>=!&|"
@@ -101,10 +100,11 @@ location = do
 
 located :: Parser a -> Parser (Located a)
 located parser = do
-   start <- location
-   ret <- parser
-   end <- location
-   pure $ Located (LocRange start end) ret
+    whiteSpace
+    start <- location
+    ret <- parser
+    end <- location
+    pure $ Located (LocRange start end) ret
 
 program :: Parser Program
 program = Program <$> (many $ located topLevelDecl) <* eof
@@ -119,33 +119,38 @@ funcDecl = do
     retType <- type_
     name <- ident
     args <- parens (commaSep funArg) <?> "arguments list"
-    body <- braces (located stmt `sepEndBy` semi) <?> "function body"
+    body <- braces (many $ located stmt) <?> "function body"
     pure $ FuncDecl name args retType (StmtBlock body)
 
 type_ :: Parser Type
 type_ = do
-    base <- baseType
-    dims <- many . squares $ pure ()
+    base <- simpleType
+    dims <- many . brackets $ pure ()
     pure $ foldl (const . TyArray) base dims
-  where
-    baseType :: Parser Type
-    baseType =     (reserved "int" >> pure TyInt)
-               <|> (reserved "void" >> pure TyVoid)
-               <|> (reserved "string" >> pure TyString)
-               <|> (reserved "boolean" >> pure TyBool)
-               <|> (TyClass <$> ident)
-               <?> "base type"
+
+simpleType :: Parser Type
+simpleType =     (reserved "int" >> pure TyInt)
+             <|> (reserved "void" >> pure TyVoid)
+             <|> (reserved "string" >> pure TyString)
+             <|> (reserved "boolean" >> pure TyBool)
+             <|> (TyClass <$> ident)
+             <?> "base type"
 
 funArg :: Parser FunArg
 funArg = FunArg <$> type_ <*> ident
 
 stmt :: Parser Stmt
-stmt =    braces (StmtBlock <$> sepEndBy (located stmt) semi)
-      <|> (reserved "return" >> StmtReturn <$> optionMaybe expr)
-      <|> (reserved "if" >> StmtIf <$> located expr <*> located stmt <*> optionMaybe (located stmt))
+stmt =    braces (StmtBlock <$> many (located stmt))
+      <|> (reserved "return" >> StmtReturn <$> optionMaybe expr <* semi)
+      <|> (reserved "if" >> StmtIf <$> parens (located expr) <*> located stmt 
+           <*> optionMaybe (reserved "else" >>located stmt))
       <|> (reserved "while" >> StmtWhile <$> parens (located expr) <*> located stmt)
-      <|> (StmtDecl <$> localDecl)
-      <|> exprBased
+      <|> (do
+            reserved "for"
+            (ty, name, ex) <- parens ((,,) <$> type_ <*> ident <* colon <*> located expr)
+            StmtFor ty name ex <$> located stmt)
+      <|> try (StmtDecl <$> localDecl <* semi)
+      <|> (exprBased <* semi)
       <|> (semi >> pure StmtNone)
       <?> "statement"
   where
@@ -159,12 +164,23 @@ stmt =    braces (StmtBlock <$> sepEndBy (located stmt) semi)
         e -> pure $ StmtExpr e
 
 expr :: Parser Expr
-expr = view obj <$> buildExpressionParser opsTable (located call)
+expr = view obj <$> buildExpressionParser opsTable (located cast)
   where
-    call = basic >>= \case
-        e@(ExprLval (LvalVar !name)) ->
-            option e (ExprCall name <$> parens (commaSep $ located expr))
+    cast = try (ExprCast <$> parens type_ <*> located call)
+        <|> call
+
+    call = complexLval >>= \case
+        e@(ExprLval lval) ->
+            option e (ExprCall lval <$> parens (commaSep $ located expr))
         e -> pure e
+
+    complexLval = do
+        e <- located basic
+        choice
+            [ dot >> ExprLval . LvalField e <$> ident
+            , ExprLval . LvalArray e <$> brackets (located expr)
+            , pure $ e ^. obj
+            ]
 
     basic =    (reserved "true" >> pure ExprTrue)
            <|> (reserved "false" >> pure ExprFalse)
@@ -172,17 +188,23 @@ expr = view obj <$> buildExpressionParser opsTable (located call)
            <|> int
            <|> (ExprString . BS.pack <$> stringLiteral)
            <|> new
+           <|> parens expr
+           <|> (ExprLval . LvalVar <$> ident)
     
     -- TODO
     int = ExprInt . fromInteger <$> integer
 
     new = do
         reserved "new"
-        name <- ident
-        option (ExprNew name) (ExprNewArr name <$> squares (located expr))
+        ty <- simpleType
+        option (ExprNew ty) $ do
+            dim <- brackets (located expr)
+            dims <- many . brackets $ pure ()
+            let ty' = foldl (const . TyArray) ty dims
+            pure $ ExprNewArr ty' dim
 
 localDecl :: Parser LocalDecl
-localDecl = LocalDecl <$> type_ <*> many localDeclItem <?> "declaration"
+localDecl = LocalDecl <$> type_ <*> (located localDeclItem `sepBy` comma) <?> "declaration"
 
 localDeclItem :: Parser LocalDeclItem
 localDeclItem = LocalDeclItem <$> ident <*> optionMaybe (reservedOp "=" >> located expr)
@@ -192,8 +214,9 @@ classDecl = do
     reserved "class"
     name <- ident
     base <- optionMaybe (reserved "extends" >> ident)
-    (fields, methods) <- partitionEithers <$> braces (many member)
-    pure $ ClassDecl name base fields methods
+    members <- braces . many $ located member
+    pure $ ClassDecl name base members
   where
-    member = try (Left <$> located field) <|> (Right <$> located funcDecl)
+    member = try (ClassMemberField <$> field)
+             <|> (ClassMemberMethod <$> funcDecl)
     field = ClassField <$> type_ <*> ident <* semi
