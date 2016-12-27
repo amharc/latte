@@ -141,7 +141,7 @@ funArg = FunArg <$> type_ <*> ident
 
 stmt :: Parser Stmt
 stmt =    braces (StmtBlock <$> many (located stmt))
-      <|> (reserved "return" >> StmtReturn <$> optionMaybe expr <* semi)
+      <|> (reserved "return" >> StmtReturn <$> optionMaybe (located expr) <* semi)
       <|> (reserved "if" >> StmtIf <$> parens (located expr) <*> located stmt 
            <*> optionMaybe (reserved "else" >>located stmt))
       <|> (reserved "while" >> StmtWhile <$> parens (located expr) <*> located stmt)
@@ -154,14 +154,14 @@ stmt =    braces (StmtBlock <$> many (located stmt))
       <|> (semi >> pure StmtNone)
       <?> "statement"
   where
-    exprBased = expr >>= \case
-        e@(ExprLval !lval) -> choice
-            [ reservedOp "++" >> pure (StmtInc lval)
-            , reservedOp "--" >> pure (StmtDec lval)
-            , reservedOp "=" >> StmtAssign lval <$> located expr
+    exprBased = located expr >>= \case
+        Located l e@(ExprLval !lval) -> choice
+            [ reservedOp "++" >> pure (StmtInc $ Located l lval)
+            , reservedOp "--" >> pure (StmtDec $ Located l lval)
+            , reservedOp "=" >> StmtAssign (Located l lval) <$> located expr
             , pure $ StmtExpr e
             ]
-        e -> pure $ StmtExpr e
+        Located _ e -> pure $ StmtExpr e
 
 expr :: Parser Expr
 expr = view obj <$> buildExpressionParser opsTable (located cast)
@@ -169,10 +169,10 @@ expr = view obj <$> buildExpressionParser opsTable (located cast)
     cast = try (ExprCast <$> parens type_ <*> located call)
         <|> call
 
-    call = complexLval >>= \case
-        e@(ExprLval lval) ->
-            option e (ExprCall lval <$> parens (commaSep $ located expr))
-        e -> pure e
+    call = located complexLval >>= \case
+        Located l e@(ExprLval lval) ->
+            option e (ExprCall (Located l lval) <$> parens (commaSep $ located expr))
+        Located _ e -> pure e
 
     complexLval = do
         e <- located basic

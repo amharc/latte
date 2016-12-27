@@ -1,5 +1,6 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Language.Latte.Middleend.Monad where
 
@@ -19,7 +20,7 @@ data MiddleEndState = MiddleEndState
     }
 
 data Diagnostic = Diagnostic
-    { _diagWhere :: !(Maybe AST.Location)
+    { _diagWhere :: !(Maybe AST.LocRange)
     , _diagContent :: !Doc
     , _diagNotes :: [Diagnostic]
     , _diagType :: !DiagnosticType
@@ -27,24 +28,24 @@ data Diagnostic = Diagnostic
 
 data DiagnosticType = DiagnosticError | DiagnosticWarning | DiagnosticNote
 
-makeLenses ''MiddleEndState
+makeClassy ''MiddleEndState
 makeLenses ''Diagnostic
 
 type MEMonad m = MonadState MiddleEndState m
 
-nextUniqueId :: MEMonad m => m UniqueId
+nextUniqueId :: (MonadState s m, HasMiddleEndState s) => m UniqueId
 nextUniqueId = fmap UniqueId (meNextUnique <+= 1)
 
-mkName :: MEMonad m => Maybe Ident -> m Name
+mkName :: (MonadState s m, HasMiddleEndState s) => Maybe Ident -> m Name
 mkName human = flip Name human <$> nextUniqueId
 
-report :: MEMonad m => Diagnostic -> m ()
+report :: (MonadState s m, HasMiddleEndState s) => Diagnostic -> m ()
 report diagnostic = meDiagnostics %= cons diagnostic
 
-addBlock :: MEMonad m => Block -> m ()
+addBlock ::(MonadState s m, HasMiddleEndState s) => Block -> m ()
 addBlock blk =
-    view (meBlocks . at (blk ^. name)) >>= \case
+    use (meBlocks . at (blk ^. name)) >>= \case
         Nothing -> meBlocks . at (blk ^. name) ?= blk
-        Just x -> fail "Block redefinition"
+        Just _ -> fail "Block redefinition"
 
-type Reportible r = (AST.HasLocation r, Pretty r)
+type Reportible r = (AST.HasLocRange r, Pretty r)

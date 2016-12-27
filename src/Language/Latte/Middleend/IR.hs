@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Middleend.IR where
 
 import Control.Lens
@@ -11,10 +12,10 @@ import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
 
 newtype UniqueId = UniqueId { getUniqueId :: Int }
-    deriving Show
+    deriving (Eq, Ord, Show)
 
 newtype Ident = Ident { getIdent :: BS.ByteString }
-    deriving (Show, IsString)
+    deriving (Eq, Ord, Show, IsString)
 
 data Operand
     = OperandNamed !Name
@@ -32,7 +33,7 @@ data Memory
     | MemoryThis
     | MemoryPointer !Operand
     | MemoryField !Memory {-# UNPACK #-} !Int
-    | MemoryOffset !Memory {-# UNPACK #-} !Operand !Size
+    | MemoryOffset !Memory !Operand !Size
     | MemoryGlobal !Ident
     deriving Show
 
@@ -104,15 +105,15 @@ data Store = Store
     deriving Show
 
 data BinOp = BinOp
-    { _binOpLhs :: !Name
+    { _binOpLhs :: !Operand
     , _binOpOp ::  !BinOperator
-    , _binOpRhs :: !Name
+    , _binOpRhs :: !Operand
     }
     deriving Show
 
 data UnOp = UnOp
     { _unOpOp :: !UnOperator
-    , _unOpArg :: !Name
+    , _unOpArg :: !Operand
     }
     deriving Show
 
@@ -168,6 +169,7 @@ data ObjectType
 data IncDec
     = Inc { _incDecMemory :: !Memory, _incDecSize :: !Size }
     | Dec { _incDecMemory :: !Memory, _incDecSize :: !Size }
+    deriving Show
 
 makeClassy ''Name
 makeLenses ''Load
@@ -205,7 +207,7 @@ instance Pretty Memory where
     pPrint MemoryThis = "this"
     pPrint (MemoryPointer ptr) = "deref" <> pPrint ptr
     pPrint (MemoryField mem i) = pPrint mem <> char '.' <> int i
-    pPrint (MemoryOffset mem i sz) = pPrint mem <> brackets (int i <+> "*" <+> pPrint sz)
+    pPrint (MemoryOffset mem i sz) = pPrint mem <> brackets (pPrint i <+> "*" <+> pPrint sz)
     pPrint (MemoryGlobal i) = "global" <+> pPrint i
 
 instance Pretty Size where
@@ -315,7 +317,7 @@ instance Pretty InstrMetadata where
     pPrint (InstrComment comment) = comment
 
 instance Pretty Block where
-    pPrint blk = hang (pPrint (blk ^. name)) 4 $ vat [phis, body, end]
+    pPrint blk = hang (pPrint (blk ^. name)) 4 $ vcat [phis, body, end]
       where
         phis = vcat . map pPrint $ blk ^. blockPhi
         body = vcat . map pPrint $ blk ^. blockBody
@@ -348,7 +350,7 @@ instance Pretty IncDec where
         , pPrint mem]
 
 instance Pretty PhiNode where
-    pPrint (PhiNode name branches) = pPrint name <+> "= phi" <+> pPrintList branches
+    pPrint (PhiNode name branches) = pPrint name <+> "= phi" <+> sep (punctuate comma $ map pPrint branches)
 
 instance Pretty PhiBranch where
     pPrint (PhiBranch from value) = pPrint from <+> "if from" <+> pPrint value

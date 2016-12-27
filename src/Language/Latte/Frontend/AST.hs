@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -7,6 +8,7 @@ module Language.Latte.Frontend.AST where
 
 import Control.Lens
 import qualified Data.Semigroup as Semi
+import Data.String
 import qualified Data.ByteString.Char8 as BS
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -41,7 +43,7 @@ data TopLevelDecl
     deriving Show
 
 newtype Ident = Ident { getIdent :: BS.ByteString }
-    deriving Show
+    deriving (Eq, Ord, Show, IsString)
 
 data FuncDecl = FuncDecl
     { _funcName :: !Ident
@@ -59,7 +61,7 @@ data Type
     | TyNull
     | TyArray !Type
     | TyClass !Ident
-    deriving Show
+    deriving (Eq, Show)
 
 data Stmt
     = StmtBlock [Located Stmt]
@@ -69,7 +71,7 @@ data Stmt
     | StmtIf !(Located Expr) !(Located Stmt) !(Maybe (Located Stmt))
     | StmtWhile !(Located Expr) !(Located Stmt)
     | StmtFor !Type !Ident !(Located Expr) !(Located Stmt)
-    | StmtAssign !Lval !(Located Expr)
+    | StmtAssign !(Located Lval) !(Located Expr)
     | StmtExpr !Expr
     | StmtDecl !LocalDecl
     | StmtNone
@@ -163,6 +165,9 @@ makeLenses ''FunArg
 makeLenses ''ClassDecl
 makeLenses ''ClassField
 
+instance HasLocRange (Located a) where
+    locRange = loc
+
 instance Semi.Semigroup LocRange where
     lhs <> rhs = LocRange
         (min (lhs ^. locStart) (rhs ^. locStart))
@@ -221,7 +226,7 @@ instance Pretty Stmt where
     pPrint (StmtFor ty name (Loc expr) (Loc body)) = blockedStmts
         ("for" <+> parens (pPrint ty <+> pPrint name <+> colon <+> pPrint expr))
         body
-    pPrint (StmtAssign lval (Loc expr)) = pPrint lval <+> equals <+> pPrint expr <> semi
+    pPrint (StmtAssign (Loc lval) (Loc expr)) = pPrint lval <+> equals <+> pPrint expr <> semi
     pPrint (StmtExpr expr) = pPrint expr <> semi
     pPrint (StmtDecl decl) = pPrint decl <> semi
     pPrint StmtNone = semi
@@ -283,7 +288,7 @@ instance Pretty Lval where
 
 instance Pretty LocalDecl where
     pPrint decl = pPrint (decl ^. localDeclType) 
-        <+> (sep . punctuate comma $ map obj (decl ^. localDeclItems))
+        <+> (sep . punctuate comma $ map pPrint (decl ^. localDeclItems))
 
 instance Pretty LocalDeclItem where
     pPrint (LocalDeclItem name Nothing) = pPrint name
