@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -5,7 +6,11 @@
 module Language.Latte.Middleend.IR where
 
 import Control.Lens
+import Control.Monad.IO.Class
 import qualified Data.ByteString.Char8 as BS
+import Data.Foldable
+import Data.IORef
+import qualified Data.Sequence as Seq
 import Data.String
 import qualified Language.Latte.Frontend.AST as Frontend
 import Text.PrettyPrint
@@ -30,6 +35,7 @@ data Name = Name
 
 data Memory
     = MemoryLocal {-# UNPACK #-} !Int
+    | MemoryArgument {-# UNPACK #-} !Int
     | MemoryThis
     | MemoryPointer !Operand
     | MemoryField !Memory {-# UNPACK #-} !Int
@@ -65,31 +71,27 @@ data InstrMetadata
 
 data Block = Block
     { _blockName :: !Name
-    , _blockPhi :: [PhiNode]
-    , _blockBody :: [Instruction]
-    , _blockEnd :: !BlockEnd
+    , _blockPhi :: {-# UNPACK #-} !(IORef [PhiNode])
+    , _blockBody :: {-# UNPACK #-} !(IORef (Seq.Seq Instruction))
+    , _blockEnd :: {-# UNPACK #-} !(IORef BlockEnd)
     }
-    deriving Show
 
 data PhiNode = PhiNode
     { _phiName :: !Name
     , _phiBranches :: [PhiBranch]
     }
-    deriving Show
 
 data PhiBranch = PhiBranch
-    { _phiFrom :: !Name
+    { _phiFrom :: !Block
     , _phiValue :: !Operand
     }
-    deriving Show
 
 data BlockEnd
-    = BlockEndBranch !Name
-    | BlockEndBranchCond !Operand !Name !Name
+    = BlockEndBranch !Block
+    | BlockEndBranchCond !Operand !Block !Block
     | BlockEndReturn !Operand
     | BlockEndReturnVoid
     | BlockEndNone
-    deriving Show
 
 data Load = Load
     { _loadFrom :: !Memory
@@ -203,7 +205,8 @@ instance Pretty Name where
     pPrint (Name i (Just n)) = char '%' <> pPrint n <> char '.' <> pPrint i
 
 instance Pretty Memory where
-    pPrint (MemoryLocal i) = braces (int i)
+    pPrint (MemoryLocal i) = "local" <> int i
+    pPrint (MemoryArgument i) = "argument" <> int i
     pPrint MemoryThis = "this"
     pPrint (MemoryPointer ptr) = "deref" <> pPrint ptr
     pPrint (MemoryField mem i) = pPrint mem <> char '.' <> int i
@@ -317,11 +320,7 @@ instance Pretty InstrMetadata where
     pPrint (InstrComment comment) = comment
 
 instance Pretty Block where
-    pPrint blk = hang (pPrint (blk ^. name)) 4 $ vcat [phis, body, end]
-      where
-        phis = vcat . map pPrint $ blk ^. blockPhi
-        body = vcat . map pPrint $ blk ^. blockBody
-        end = pPrint (blk ^. blockEnd)
+    pPrint block = "block" <+> pPrint (block ^. blockName)
 
 instance Pretty BlockEnd where
     pPrint (BlockEndBranch target) = "branch to" <+> pPrint target
@@ -354,3 +353,21 @@ instance Pretty PhiNode where
 
 instance Pretty PhiBranch where
     pPrint (PhiBranch from value) = pPrint from <+> "if from" <+> pPrint value
+
+class PrettyIO a where
+    pPrintIO :: MonadIO m => a -> m Doc
+
+instance PrettyIO Block where
+    pPrintIO blk = do
+        phi <- fmap (vcat . map pPrint) . liftIO . readIORef $ blk ^. blockPhi
+        body <- fmap (vcat . map pPrint . toList) . liftIO . readIORef $ blk ^. blockBody
+        end <- fmap pPrint . liftIO . readIORef $ blk ^. blockEnd
+        pure $ pPrint (blk ^. name) $+$ nest 4 (phi $+$ body $+$ end)
+
+successors :: MonadIO m => Block -> m [Block]
+successors block = liftIO $ readIORef (block ^. blockEnd) >>= \case
+    BlockEndNone -> pure []
+    BlockEndBranch target -> pure [target]
+    BlockEndBranchCond _ ifTrue ifFalse -> pure [ifTrue, ifFalse]
+    BlockEndReturn _ -> pure []
+    BlockEndReturnVoid -> pure []

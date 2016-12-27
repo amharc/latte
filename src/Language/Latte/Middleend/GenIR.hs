@@ -14,7 +14,10 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.State
+import Data.Coerce
+import Data.IORef
 import qualified Data.Map as Map
+import qualified Data.Sequence as Seq
 import qualified Language.Latte.Frontend.AST as AST
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
@@ -36,7 +39,7 @@ data GIREnv = GIREnv
     }
 
 data FuncInfo = FuncInfo
-    { _funcInfoDecl :: AST.FuncDecl
+    { _funcInfoDecl :: AST.Located AST.FuncDecl
     , _funcInfoVtablePos :: Maybe Int
     }
 
@@ -51,17 +54,16 @@ data ClassField = ClassField
     , _classFieldId :: Int
     }
 
-newtype VariableId = VariableId { getVariableId :: Int }
-    deriving (Eq, Show)
-
-type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m)
+type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m)
 
 data Variable = Variable
     { _varType :: !AST.Type
-    , _varId :: {-# UNPACK #-} !VariableId
+    , _varLoc :: VariableLoc
     , _varState :: !VarState
-    , _varBound :: !(AST.Located AST.LocalDecl)
     }
+    deriving Show
+
+data VariableLoc = VariableLocal !Int | VariableArgument !Int
     deriving Show
 
 data VarState
@@ -84,44 +86,61 @@ transLocalDecl decl = mapM_ go $ decl ^. AST.localDeclItems
   where
     go item = girVariables . at (item ^. AST.obj . AST.localDeclName) . singular _Just . varState .= VarUsable
 
-finishBlockStartNew :: GIRMonad m => Name -> m ()
-finishBlockStartNew newBlockName = do
-    block <- use girCurrentBlock
-    addBlock block{_blockBody = reverse $ block ^. blockBody}
-    girCurrentBlock .= Block
-        { _blockName = newBlockName
-        , _blockPhi = []
-        , _blockBody = []
-        , _blockEnd = BlockEndNone
-        }
+newBlock :: GIRMonad m => Ident -> m Block
+newBlock name = do
+   phi <- liftIO $ newIORef []
+   body <- liftIO $ newIORef Seq.empty
+   end <- liftIO $ newIORef BlockEndNone
+   name <- mkName $ Just name
+   pure $ Block name phi body end
 
-newBasicBlock :: GIRMonad m => Name -> m () -> m ()
-newBasicBlock blockName act = do
+inBlock :: GIRMonad m => Block -> m a -> m a
+inBlock block act = do
     oldBlock <- use girCurrentBlock
-
-    girCurrentBlock .= Block
-        { _blockName = blockName
-        , _blockPhi = []
-        , _blockBody = []
-        , _blockEnd = BlockEndNone
-        }
-    act
-    finishBlockStartNew blockName
-
+    girCurrentBlock .= block
+    ret <- act
     girCurrentBlock .= oldBlock
+    pure ret
+
+switchToBlock :: GIRMonad m => Block -> m ()
+switchToBlock block = girCurrentBlock .= block
 
 assertReachableStmt :: GIRMonad m => AST.Located AST.Stmt -> m ()
-assertReachableStmt stmt = use (girCurrentBlock . blockEnd) >>= \case
-    BlockEndNone -> pure ()
-    _ -> simpleError stmt $ "unreachable statement"
+assertReachableStmt stmt = isReachable >>= flip unless (simpleError stmt $ "unreachable statement")
 
 whenReachable :: GIRMonad m => m () -> m ()
-whenReachable act = use (girCurrentBlock . blockEnd) >>= \case
-    BlockEndNone -> act
-    _ -> pure ()
+whenReachable act = isReachable >>= flip when act
+
+isReachable :: GIRMonad m => m Bool
+isReachable = use (girCurrentBlock . blockEnd) >>= liftIO . readIORef >>= \case
+    BlockEndNone -> pure True
+    _ -> pure False
 
 transStmt :: GIRMonad m => AST.Located AST.Stmt -> m ()
-transStmt (AST.Located _ (AST.StmtBlock stmts)) = undefined --TODO
+transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
+    oldVariables <- use girVariables
+
+    forM_ stmts $ \case
+        AST.Located l (AST.StmtDecl decl) -> addDecl (AST.Located l decl)
+        _ -> pure ()
+
+    forM_ stmts transStmt
+
+    girVariables .= oldVariables
+  where
+    addDecl decl = forM_ (decl ^. AST.obj ^. AST.localDeclItems) $ \item -> do
+        ident <- girVariableCnt <+= 1
+
+        use (girVariables . at (item ^. AST.obj ^. AST.localDeclName)) >>= \case
+            Just var | var ^. varState == VarUndefined ->
+                simpleError item $ "Duplicate definition of a variable"
+            _ -> pure ()
+
+        girVariables . at (item ^. AST.obj ^. AST.localDeclName) ?= Variable
+            { _varType = decl ^. AST.obj ^. AST.localDeclType
+            , _varLoc = VariableLocal ident
+            , _varState = VarUndefined
+            }
 transStmt st@(AST.Located l (AST.StmtAssign lval expr)) = do
     (lvalTy, lvalMem) <- transLval lval
     (exprTy, exprOperand) <- transExpr expr
@@ -147,43 +166,44 @@ transStmt st@(AST.Located l (AST.StmtDec lval)) = do
 transStmt st@(AST.Located l (AST.StmtIf cond ifTrue mifFalse)) = do
     operand <- transExprTypeEqual AST.TyBool cond
 
-    endName <- mkName $ Just "ifEnd"
-    trueBranchName <- mkName $ Just "ifTrue"
-    falseBranchName <- case mifFalse of
-        Nothing -> pure endName
-        Just _ -> mkName $ Just "ifFalse"
+    endBlock <- newBlock "ifEnd"
+    trueBlock <- newBlock "ifTrue"
+    falseBlock <- case mifFalse of
+        Nothing -> pure endBlock
+        Just _ -> newBlock "ifFalse"
 
-    setEnd $ BlockEndBranchCond operand trueBranchName falseBranchName
+    setEnd $ BlockEndBranchCond operand trueBlock falseBlock
 
-    finishBlockStartNew trueBranchName
-    transStmt ifTrue
-    setEnd $ BlockEndBranch endName
+    inBlock trueBlock $ do
+        transStmt ifTrue
+        setEnd $ BlockEndBranch endBlock
 
     forM_ mifFalse $ \ifFalse -> do
-        finishBlockStartNew falseBranchName
-        transStmt ifFalse
-        setEnd $ BlockEndBranch endName
+        inBlock falseBlock $ do
+            transStmt ifFalse
+            setEnd $ BlockEndBranch endBlock
 
-    finishBlockStartNew endName
+    switchToBlock endBlock
 transStmt st@(AST.Located l (AST.StmtWhile cond body)) = do
-    condName <- mkName $ Just "whileCond"
-    bodyName <- mkName $ Just "whileBody"
-    endName <- mkName $ Just "whileEnd"
+    condBlock <- newBlock "whileCond"
+    bodyBlock <- newBlock "whileBody"
+    endBlock <- newBlock "whileEnd"
 
-    setEnd $ BlockEndBranch condName
-    finishBlockStartNew condName
+    setEnd $ BlockEndBranch condBlock
 
-    (ty, operand) <- transExpr cond
-    checkTypeEqual cond AST.TyBool ty
-    setEnd $ BlockEndBranchCond operand bodyName endName
-    finishBlockStartNew bodyName
+    inBlock condBlock $ do
+        (ty, operand) <- transExpr cond
+        checkTypeEqual cond AST.TyBool ty
+        setEnd $ BlockEndBranchCond operand bodyBlock endBlock
 
-    transStmt body
-    setEnd $ BlockEndBranch condName
-    finishBlockStartNew endName
+    inBlock bodyBlock $ do
+        transStmt body
+        setEnd $ BlockEndBranch condBlock
+
+    switchToBlock endBlock
 transStmt st@(AST.Located l (AST.StmtFor ty idx array body)) = undefined -- TODO
 transStmt st@(AST.Located l (AST.StmtExpr expr)) = void $ transExpr (AST.Located l expr)
-transStmt st@(AST.Located l (AST.StmtDecl decl)) = forM_ (decl ^. AST.localDeclItems) go
+transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> forM_ (decl ^. AST.localDeclItems) go
   where
     expectedType = decl ^. AST.localDeclType
 
@@ -200,7 +220,7 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = forM_ (decl ^. AST.localDeclI
                 _ -> pure (expectedType, OperandInt 0)
         checkTypeImplicitConv locItem expectedType ty
         void $ emitInstr Nothing
-            (IStore (Store (MemoryLocal . getVariableId $ var ^. varId) (sizeOf ty) operand))
+            (IStore (Store (memoryOfVariable $ var ^. varLoc) (sizeOf ty) operand))
             li [InstrComment $ "initialize" <+> pPrint item]
 transStmt st@(AST.Located l AST.StmtNone) = pure ()
 
@@ -220,10 +240,10 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
             simpleError ex $ "Unresolved function, unable to call"
             pure (AST.TyInt, OperandInt 0) -- TODO
         Just (dest, info) -> do
-            checkCallArgumentsLength ex (info ^. funcInfoDecl ^. AST.funcArgs) argExprs
-            args <- zipWithM prepareArg (info ^. funcInfoDecl ^. AST.funcArgs) argExprs
+            checkCallArgumentsLength ex (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
+            args <- zipWithM prepareArg (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
             ret <- emitInstr Nothing (ICall $ Call dest args) l [InstrComment $ "call" <+> pPrint ex]
-            pure (info ^. funcInfoDecl ^. AST.funcRetType, OperandNamed ret)
+            pure (info ^. funcInfoDecl . AST.obj . AST.funcRetType, OperandNamed ret)
   where
      prepareArg :: GIRMonad m => AST.FunArg -> AST.Located AST.Expr -> m Operand
      prepareArg arg expr = do
@@ -239,34 +259,36 @@ transExpr ex@(AST.Located l (AST.ExprUnOp AST.UnOpNeg arg)) = do
     ret <- emitInstr (Just "neg") (IUnOp (UnOp UnOpNeg operand)) l []
     pure (AST.TyInt, OperandNamed ret)
 transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpAnd rhs)) = do
-    endName <- mkName $ Just "andEnd"
-    midName <- mkName $ Just "andMid"
-    name <- use $ girCurrentBlock . blockName
+    endBlock <- newBlock "andEnd"
+    midBlock <- newBlock "andMid"
+    block <- use girCurrentBlock
 
     operandLhs <- transExprTypeEqual AST.TyBool lhs
-    setEnd $ BlockEndBranchCond operandLhs midName endName
-    finishBlockStartNew midName
+    setEnd $ BlockEndBranchCond operandLhs midBlock endBlock
 
-    operandRhs <- transExprTypeEqual AST.TyBool rhs
-    setEnd $ BlockEndBranch endName
-    finishBlockStartNew endName
+    operandRhs <- inBlock midBlock $ do
+        operandRhs <- transExprTypeEqual AST.TyBool rhs
+        setEnd $ BlockEndBranch endBlock
+        pure operandRhs
 
-    value <- emitPhi (Just "and") [PhiBranch name operandLhs, PhiBranch midName operandRhs]
+    switchToBlock endBlock
+    value <- emitPhi (Just "and") [PhiBranch block operandLhs, PhiBranch midBlock operandRhs]
     pure (AST.TyBool, OperandNamed value)
 transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpOr rhs)) = do
-    endName <- mkName $ Just "orEnd"
-    midName <- mkName $ Just "orMid"
-    name <- use $ girCurrentBlock . blockName
+    endBlock <- newBlock "orEnd"
+    midBlock <- newBlock "orMid"
+    block <- use girCurrentBlock
 
     operandLhs <- transExprTypeEqual AST.TyBool lhs
-    setEnd $ BlockEndBranchCond operandLhs endName midName
-    finishBlockStartNew midName
+    setEnd $ BlockEndBranchCond operandLhs endBlock midBlock
 
-    operandRhs <- transExprTypeEqual AST.TyBool rhs
-    setEnd $ BlockEndBranch endName
-    finishBlockStartNew endName
+    operandRhs <- inBlock midBlock $ do
+        operandRhs <- transExprTypeEqual AST.TyBool rhs
+        setEnd $ BlockEndBranch endBlock
+        pure operandRhs
 
-    value <- emitPhi (Just "or") [PhiBranch name operandLhs, PhiBranch midName operandRhs]
+    switchToBlock endBlock
+    value <- emitPhi (Just "or") [PhiBranch block operandLhs, PhiBranch midBlock operandRhs]
     pure (AST.TyBool, OperandNamed value)
 transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
     (tyLhs, operandLhs) <- transExpr lhs
@@ -321,7 +343,7 @@ transLval lval@(AST.Located _ (AST.LvalVar ident)) =
             case var ^. varState of
                 VarUndefined -> simpleError lval $ "Variable referenced before definition"
                 VarUsable -> pure ()
-            pure (var ^. varType, MemoryLocal . getVariableId $ var ^. varId)
+            pure (var ^. varType, memoryOfVariable $ var ^. varLoc)
 transLval lval@(AST.Located _ (AST.LvalArray arrExpr idxExpr)) = do
     (tyArr, operandArr) <- transExpr arrExpr
     operandIdx <- transExprTypeEqual AST.TyInt idxExpr
@@ -374,6 +396,88 @@ transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
     simpleError lval "Not a function"
     pure Nothing
 
+transFuncDecl :: GIRMonad m => AST.Located AST.FuncDecl -> m ()
+transFuncDecl locDecl@(AST.Located l decl) = do
+    entryBlock <- newBlock "entry"
+
+    girVariableCnt .= 0
+    girVariables .= Map.empty
+    girCurrentBlock .= entryBlock
+
+    local (girCurrentFunction ?~ decl) $ do
+        zipWithM_ addArg [0..] (decl ^. AST.funcArgs)
+        forM_ (decl ^. AST.funcArgs) markAsUsable
+        transStmt $ decl ^. AST.funcBody
+        when (decl ^. AST.funcRetType == AST.TyVoid) $
+            setEnd BlockEndReturnVoid
+
+    addFunction (coerce $ decl ^. AST.funcName) entryBlock
+  where
+    addArg idx arg = do
+        checkType locDecl (arg ^. AST.funArgType)
+        use (girVariables . at (arg ^. AST.funArgName)) >>= \case
+            Just var | var ^. varState == VarUndefined ->
+                simpleError locDecl $ "Duplicate definition of argument:" <+> pPrint (arg ^. AST.funArgName)
+            _ -> pure ()
+
+        girVariables . at (arg ^. AST.funArgName) ?= Variable
+            { _varType = arg ^. AST.funArgType
+            , _varLoc = VariableArgument idx
+            , _varState = VarUndefined
+            }
+
+    markAsUsable arg = girVariables . at (arg ^. AST.funArgName) . singular _Just . varState .= VarUsable
+
+transClassDecl :: GIRMonad m => AST.Located AST.ClassDecl -> m ()
+transClassDecl = undefined -- TODO
+
+transProgram :: GIRMonad m => AST.Program -> m ()
+transProgram (AST.Program prog) = do
+    functionsMap <- view girFunctions
+    functionsMap <- foldM addFunction functionsMap functions
+    local (girFunctions .~ functionsMap) $ forM_ prog $ \case
+        AST.Located l (AST.TLDFunc decl) -> transFuncDecl $ AST.Located l decl
+        AST.Located l (AST.TLDClass decl) -> transClassDecl $ AST.Located l decl
+    case Map.lookup "main" functionsMap of
+        Just info -> do
+            let decl = info ^. funcInfoDecl
+            unless (length (decl ^. AST.obj . AST.funcArgs) == 0) $
+                simpleError decl "main must be parameterless"
+            unless (decl ^. AST.obj . AST.funcRetType == AST.TyInt) $
+                simpleError decl "main must return int"
+        Nothing -> report Diagnostic
+            { _diagWhere = Nothing
+            , _diagContent = "no definition of main"
+            , _diagType = DiagnosticError
+            , _diagNotes = []
+            }
+    pure ()
+  where
+    functions = [ AST.Located l decl | AST.Located l (AST.TLDFunc decl) <- prog ]
+    addFunction acc decl
+        | Map.member name acc = do
+            simpleError decl $ "Function redefinition"
+            pure acc
+        | otherwise = pure $ Map.insert name (FuncInfo decl Nothing) acc
+      where
+        name = decl ^. AST.obj . AST.funcName
+
+memoryOfVariable :: VariableLoc -> Memory
+memoryOfVariable (VariableLocal idx) = MemoryLocal idx
+memoryOfVariable (VariableArgument idx) = MemoryArgument idx
+
+checkType :: (GIRMonad m, Reportible r) => r -> AST.Type -> m ()
+checkType ctx AST.TyInt = pure ()
+checkType ctx AST.TyBool = pure ()
+checkType ctx AST.TyVoid = pure ()
+checkType ctx AST.TyString = pure ()
+checkType ctx AST.TyNull = pure ()
+checkType ctx (AST.TyArray ty) = checkType ctx ty
+checkType ctx (AST.TyClass name) =
+    view (girClasses . at name) >>= \case
+        Just _ -> pure ()
+        Nothing -> simpleError ctx $ "Unknown class" <+> pPrint name
+
 simpleError :: (GIRMonad m, Reportible r) => r -> Doc -> m ()
 simpleError ctx head = report Diagnostic
     { _diagWhere = Just $ ctx ^. AST.locRange
@@ -425,17 +529,21 @@ checkTypesComparable ctx expected got = unless (comparable expected got) . simpl
 emitInstr :: GIRMonad m => Maybe Ident -> InstrPayload -> AST.LocRange -> [InstrMetadata] -> m Name
 emitInstr humanName payload loc meta = do
     result <- mkName humanName
-    girCurrentBlock . blockBody %= cons (Instruction result payload (Just loc) meta)
+    ioref <- use $ girCurrentBlock . blockBody
+    liftIO $ modifyIORef' ioref (Seq.|> Instruction result payload (Just loc) meta)
     pure result
 
 emitPhi :: GIRMonad m => Maybe Ident -> [PhiBranch] -> m Name
 emitPhi humanName branches = do
     result <- mkName humanName
-    girCurrentBlock . blockPhi %= cons (PhiNode result branches)
+    ioref <- use $ girCurrentBlock . blockPhi
+    liftIO $ modifyIORef' ioref (PhiNode result branches :)
     pure result
 
 setEnd :: GIRMonad m => BlockEnd -> m ()
-setEnd end = whenReachable $ girCurrentBlock . blockEnd .= end
+setEnd end = whenReachable $ do
+    ioref <- use $ girCurrentBlock . blockEnd
+    liftIO $ writeIORef ioref end
 
 sizeOf :: AST.Type -> Size
 sizeOf AST.TyInt = Size32
@@ -445,3 +553,21 @@ sizeOf AST.TyString = SizePtr
 sizeOf (AST.TyArray _) = SizePtr
 sizeOf (AST.TyClass _) = SizePtr
 sizeOf AST.TyNull = SizePtr
+
+generateIR :: AST.Program -> MEMonad ()
+generateIR program = do
+    me <- get
+    ret <- execStateT (runReaderT (transProgram program) env0) GIRState
+        { _girME = me
+        , _girVariableCnt = 0
+        , _girVariables = Map.empty
+        , _girCurrentBlock = error "Outside"
+        }
+    put (ret ^. girME)
+  where
+    env0 = GIREnv
+        { _girCurrentFunction = Nothing
+        , _girCurrentClass = Nothing
+        , _girFunctions = Map.empty
+        , _girClasses = Map.empty
+        }

@@ -49,7 +49,7 @@ data FuncDecl = FuncDecl
     { _funcName :: !Ident
     , _funcArgs :: [FunArg]
     , _funcRetType :: !Type
-    , _funcBody :: !Stmt
+    , _funcBody :: !(Located Stmt)
     }
     deriving Show
 
@@ -197,7 +197,7 @@ instance Pretty FuncDecl where
         (pPrint (decl ^. funcRetType) 
           <+> pPrint (decl ^. funcName)
           <>  parens (sep . punctuate comma $ map pPrint (decl ^. funcArgs)))
-        (view funcBody decl)
+        (decl ^. funcBody . obj)
 
 instance Pretty Type where
     pPrint TyInt = "int"

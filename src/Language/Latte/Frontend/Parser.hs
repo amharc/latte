@@ -119,8 +119,8 @@ funcDecl = do
     retType <- type_
     name <- ident
     args <- parens (commaSep funArg) <?> "arguments list"
-    body <- braces (many $ located stmt) <?> "function body"
-    pure $ FuncDecl name args retType (StmtBlock body)
+    body <- located (braces . many $ located stmt) <?> "function body"
+    pure $ FuncDecl name args retType (StmtBlock <$> body)
 
 type_ :: Parser Type
 type_ = do
