@@ -156,6 +156,7 @@ data UnOperator
 
 data Intristic
     = IntristicAlloc {-# UNPACK #-} !Int !ObjectType
+    | IntristicConcat !Operand !Operand
     deriving Show
 
 data ObjectType
@@ -223,18 +224,16 @@ instance Pretty Size where
 instance Pretty Load where
     pPrint load = hsep
         [ "load"
-        , pPrint (load ^. loadSize)
-        , "from"
+        , parens $ pPrint (load ^. loadSize)
         , pPrint (load ^. loadFrom)
         ]
 
 instance Pretty Store where
     pPrint store = hsep
         [ "store"
-        , pPrint (store ^. storeSize)
-        , "value"
+        , parens $ pPrint (store ^. storeSize)
         , pPrint (store ^. storeValue)
-        , "to"
+        , "into"
         , pPrint (store ^. storeTo)
         ]
 
@@ -285,6 +284,7 @@ instance Pretty CallDest where
 
 instance Pretty Intristic where
     pPrint (IntristicAlloc size ty) = "alloc" <+> int size <+> "bytes of" <+> pPrint ty
+    pPrint (IntristicConcat lhs rhs) = "concat" <+> pPrint lhs <> comma <+> pPrint rhs
 
 instance Pretty ObjectType where
     pPrint ObjectInt = "int"
@@ -352,7 +352,7 @@ instance Pretty PhiNode where
     pPrint (PhiNode name branches) = pPrint name <+> "= phi" <+> sep (punctuate comma $ map pPrint branches)
 
 instance Pretty PhiBranch where
-    pPrint (PhiBranch from value) = pPrint from <+> "if from" <+> pPrint value
+    pPrint (PhiBranch from value) = pPrint value <+> "if from" <+> pPrint from
 
 class PrettyIO a where
     pPrintIO :: MonadIO m => a -> m Doc
@@ -371,3 +371,6 @@ successors block = liftIO $ readIORef (block ^. blockEnd) >>= \case
     BlockEndBranchCond _ ifTrue ifFalse -> pure [ifTrue, ifFalse]
     BlockEndReturn _ -> pure []
     BlockEndReturnVoid -> pure []
+
+nameToIdent :: Name -> Ident
+nameToIdent name = Ident . BS.pack $ '.' : show (views nameUnique getUniqueId name)

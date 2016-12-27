@@ -10,6 +10,8 @@ import Language.Latte.Middleend.IR
 import qualified Language.Latte.Frontend.AST as AST
 import Control.Lens
 import Control.Monad.State
+import qualified Data.ByteString.Char8 as BS
+import Data.Foldable
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
@@ -19,7 +21,8 @@ import Text.PrettyPrint.HughesPJClass
 data MiddleEndState = MiddleEndState
     { _meNextUnique :: !Int
     , _meFunctions :: Map.Map Ident FunctionDescriptor
-    , _meDiagnostics :: [Diagnostic]
+    , _meStrings :: Map.Map Name BS.ByteString
+    , _meDiagnostics :: Seq.Seq Diagnostic
     }
 
 data Diagnostic = Diagnostic
@@ -48,28 +51,25 @@ mkName :: (MonadState s m, HasMiddleEndState s) => Maybe Ident -> m Name
 mkName human = flip Name human <$> nextUniqueId
 
 report :: (MonadState s m, HasMiddleEndState s) => Diagnostic -> m ()
-report diagnostic = meDiagnostics %= cons diagnostic
+report diagnostic = meDiagnostics %= (|> diagnostic)
 
 addFunction :: (MonadState s m, HasMiddleEndState s) => Ident -> Block -> m ()
 addFunction ident entryBlock = meFunctions . at ident ?= FunctionDescriptor entryBlock
 
+internString :: (MonadState s m, HasMiddleEndState s) => Name -> BS.ByteString -> m ()
+internString name str = meStrings . at name ?= str
+
 type Reportible r = (AST.HasLocRange r, Pretty r)
 
 debugState :: MEMonad Doc
-debugState = do
-    funcs <- use meFunctions
-    ifoldrM go empty funcs
-  where
-    go :: Ident -> FunctionDescriptor -> Doc -> MEMonad Doc
-    go name func acc = do
-        body <- pPrintIO func
-        pure $ hang ("function" <+> pPrint name) 4 body $+$ acc
+debugState = get >>= pPrintIO
 
 run :: MEMonad () -> IO [Diagnostic]
-run act = view meDiagnostics <$> execStateT act MiddleEndState
+run act = views meDiagnostics toList <$> execStateT act MiddleEndState
     { _meNextUnique = 0
     , _meFunctions = Map.empty
-    , _meDiagnostics = []
+    , _meDiagnostics = Seq.empty
+    , _meStrings = Map.empty
     }
 
 instance PrettyIO FunctionDescriptor where
@@ -88,15 +88,25 @@ instance PrettyIO FunctionDescriptor where
             | Set.member (block ^. blockName) set = (queue, set)
             | otherwise = (queue |> block, Set.insert (block ^. blockName) set)
 
-instance Pretty Diagnostic where
-    pPrint diag = hang header 4 (vcat . map pPrint $ diag ^. diagNotes)
+instance PrettyIO MiddleEndState where
+    pPrintIO state = do
+       funcs <- ifoldrM goFunc empty (state ^. meFunctions)
+       let strings = vcat ["string" <+> pPrint name <+> "=" <+> pPrint (BS.unpack str)
+                          | (name, str) <- itoList $ state ^. meStrings]
+       pure $ funcs $+$ strings
       where
-        header = vcat
+        goFunc name func acc = do
+            body <- pPrintIO func
+            pure $ hang ("function" <+> pPrint name) 4 body $+$ acc
+
+instance Pretty Diagnostic where
+    pPrint diag = hang main 4 (vcat . map pPrint $ diag ^. diagNotes)
+      where
+        header = sep
             [ pPrint $ diag ^. diagType
             , maybe empty pPrint $ diag ^. diagWhere
-            , ":"
-            , diag ^. diagContent
             ]
+        main = header $+$ nest 4 (diag ^. diagContent)
         
 instance Pretty DiagnosticType where
     pPrint DiagnosticError = "error"

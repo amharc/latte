@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -16,8 +17,10 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Data.Coerce
 import Data.IORef
+import qualified Data.ByteString.Char8 as BS
 import qualified Data.Map as Map
 import qualified Data.Sequence as Seq
+import GHC.Stack
 import qualified Language.Latte.Frontend.AST as AST
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
@@ -116,7 +119,7 @@ isReachable = use (girCurrentBlock . blockEnd) >>= liftIO . readIORef >>= \case
     BlockEndNone -> pure True
     _ -> pure False
 
-transStmt :: GIRMonad m => AST.Located AST.Stmt -> m ()
+transStmt :: (HasCallStack, GIRMonad m) => AST.Located AST.Stmt -> m ()
 transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
     oldVariables <- use girVariables
 
@@ -129,7 +132,7 @@ transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
     girVariables .= oldVariables
   where
     addDecl decl = forM_ (decl ^. AST.obj ^. AST.localDeclItems) $ \item -> do
-        ident <- girVariableCnt <+= 1
+        ident <- girVariableCnt <<+= 1
 
         use (girVariables . at (item ^. AST.obj ^. AST.localDeclName)) >>= \case
             Just var | var ^. varState == VarUndefined ->
@@ -224,13 +227,17 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
             li [InstrComment $ "initialize" <+> pPrint item]
 transStmt st@(AST.Located l AST.StmtNone) = pure ()
 
-transExpr :: GIRMonad m => AST.Located AST.Expr -> m (AST.Type, Operand)
+transExpr :: (HasCallStack, GIRMonad m) => AST.Located AST.Expr -> m (AST.Type, Operand)
 transExpr   (AST.Located l (AST.ExprLval lval)) = do
     (ty, memory) <- transLval (AST.Located l lval)
     value <- emitInstr Nothing (ILoad (Load memory (sizeOf ty))) l [InstrComment $ "load" <+> pPrint lval]
     pure (ty, OperandNamed value)
 transExpr    (AST.Located _ (AST.ExprInt i)) = pure (AST.TyInt, OperandInt i)
-transExpr    (AST.Located _ (AST.ExprString str)) = undefined -- TODO
+transExpr    (AST.Located l (AST.ExprString str)) = do
+    name <- mkName Nothing
+    internString name str
+    value <- emitInstr Nothing (IGetAddr (GetAddr (MemoryGlobal (nameToIdent name)))) l [InstrComment . pPrint $ BS.unpack str]
+    pure (AST.TyString, OperandNamed value)
 transExpr    (AST.Located _ AST.ExprTrue) = pure (AST.TyBool, OperandInt 1)
 transExpr    (AST.Located _ AST.ExprFalse) = pure (AST.TyBool, OperandInt 0)
 transExpr    (AST.Located _ AST.ExprNull) = pure (AST.TyNull, OperandInt 0)
@@ -304,6 +311,9 @@ transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
         (_, AST.BinOpNotEqual, _) -> do
             checkTypesComparable ex tyLhs tyRhs
             (AST.TyBool,) <$> emit BinOpNotEqual
+        (AST.TyString, AST.BinOpPlus, AST.TyString) -> do
+            val <- emitInstr (Just "concat") (IIntristic (IntristicConcat operandLhs operandRhs)) l []
+            pure (AST.TyString, OperandNamed val)
         (AST.TyInt, intOp -> Just (retTy, op), AST.TyInt) ->
             (retTy,) <$> emit op
         _ -> do
@@ -333,7 +343,7 @@ transExprTypeEqual expectedType expr = do
     checkTypeEqual expr expectedType ty
     pure operand
 
-transLval :: GIRMonad m => AST.Located AST.Lval -> m (AST.Type, Memory)
+transLval :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (AST.Type, Memory)
 transLval lval@(AST.Located _ (AST.LvalVar ident)) =
     use (girVariables . at ident) >>= \case
         Nothing -> do
@@ -373,7 +383,7 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
             simpleError lval $ pPrint tyObj <+> "has no fields"
             pure (AST.TyInt, MemoryField (MemoryPointer operandObj) 0)
 
-transFunCall :: GIRMonad m => AST.Located AST.Lval -> m (Maybe (CallDest, FuncInfo))
+transFunCall :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (Maybe (CallDest, FuncInfo))
 transFunCall (AST.Located _ (AST.LvalVar name)) = view (girFunctions . at name) >>= \case
     Nothing -> pure Nothing
     Just info -> pure . Just $ case info ^. funcInfoVtablePos of
@@ -396,7 +406,7 @@ transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
     simpleError lval "Not a function"
     pure Nothing
 
-transFuncDecl :: GIRMonad m => AST.Located AST.FuncDecl -> m ()
+transFuncDecl :: (HasCallStack, GIRMonad m) => AST.Located AST.FuncDecl -> m ()
 transFuncDecl locDecl@(AST.Located l decl) = do
     entryBlock <- newBlock "entry"
 
@@ -431,7 +441,7 @@ transFuncDecl locDecl@(AST.Located l decl) = do
 transClassDecl :: GIRMonad m => AST.Located AST.ClassDecl -> m ()
 transClassDecl = undefined -- TODO
 
-transProgram :: GIRMonad m => AST.Program -> m ()
+transProgram :: (HasCallStack, GIRMonad m) => AST.Program -> m ()
 transProgram (AST.Program prog) = do
     functionsMap <- view girFunctions
     functionsMap <- foldM addFunction functionsMap functions
@@ -568,6 +578,19 @@ generateIR program = do
     env0 = GIREnv
         { _girCurrentFunction = Nothing
         , _girCurrentClass = Nothing
-        , _girFunctions = Map.empty
+        , _girFunctions =
+            [ builtin "printInt" AST.TyVoid [AST.TyInt]
+            , builtin "printString" AST.TyVoid [AST.TyString]
+            , builtin "error" AST.TyVoid []
+            , builtin "readInt" AST.TyInt []
+            , builtin "readString" AST.TyString []
+            ]
         , _girClasses = Map.empty
         }
+    nowhere = AST.LocRange (AST.Location 0 0) (AST.Location 0 0)
+    builtin name retTy argTys = (name, flip FuncInfo Nothing $ AST.Located nowhere AST.FuncDecl
+        { AST._funcName = name
+        , AST._funcArgs = [ AST.FunArg ty "" | ty <- argTys ]
+        , AST._funcRetType = retTy
+        , AST._funcBody = AST.Located nowhere AST.StmtNone
+        })
