@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Language.Latte.Middleend.IR where
 
 import Control.Lens
 import qualified Data.ByteString.Char8 as BS
+import Data.String
 import qualified Language.Latte.Frontend.AST as Frontend
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -12,7 +14,7 @@ newtype UniqueId = UniqueId { getUniqueId :: Int }
     deriving Show
 
 newtype Ident = Ident { getIdent :: BS.ByteString }
-    deriving Show
+    deriving (Show, IsString)
 
 data Operand
     = OperandNamed !Name
@@ -23,15 +25,18 @@ data Name = Name
     { _nameUnique :: {-# UNPACK #-} !UniqueId
     , _nameHuman :: !(Maybe Ident)
     }
-    deriving Show
+    deriving (Eq, Ord, Show)
 
 data Memory
     = MemoryLocal {-# UNPACK #-} !Int
+    | MemoryThis
+    | MemoryPointer !Operand
     | MemoryField !Memory {-# UNPACK #-} !Int
-    | MemoryOffset !Memory {-# UNPACK #-} !Int
+    | MemoryOffset !Memory {-# UNPACK #-} !Operand !Size
+    | MemoryGlobal !Ident
     deriving Show
 
-data Size = Size8 | Size32 | Size64
+data Size = Size8 | Size32 | Size64 | Size0 | SizePtr
     deriving Show
 
 data InstrPayload
@@ -42,6 +47,7 @@ data InstrPayload
     | IGetAddr !GetAddr
     | ICall !Call
     | IIntristic !Intristic
+    | IIncDec !IncDec
     deriving Show
 
 data Instruction = Instruction
@@ -53,13 +59,26 @@ data Instruction = Instruction
     deriving Show
 
 data InstrMetadata
-    = InstrComment !BS.ByteString
+    = InstrComment Doc
     deriving Show
 
 data Block = Block
     { _blockName :: !Name
+    , _blockPhi :: [PhiNode]
     , _blockBody :: [Instruction]
     , _blockEnd :: !BlockEnd
+    }
+    deriving Show
+
+data PhiNode = PhiNode
+    { _phiName :: !Name
+    , _phiBranches :: [PhiBranch]
+    }
+    deriving Show
+
+data PhiBranch = PhiBranch
+    { _phiFrom :: !Name
+    , _phiValue :: !Operand
     }
     deriving Show
 
@@ -68,7 +87,7 @@ data BlockEnd
     | BlockEndBranchCond !Operand !Name !Name
     | BlockEndReturn !Operand
     | BlockEndReturnVoid
-    | BlockEndCheckUnreachable
+    | BlockEndNone
     deriving Show
 
 data Load = Load
@@ -80,7 +99,7 @@ data Load = Load
 data Store = Store
     { _storeTo :: !Memory
     , _storeSize :: !Size
-    , _storeValue :: !Name
+    , _storeValue :: !Operand
     }
     deriving Show
 
@@ -146,6 +165,10 @@ data ObjectType
     | ObjectClass !Ident
     deriving Show
 
+data IncDec
+    = Inc { _incDecMemory :: !Memory, _incDecSize :: !Size }
+    | Dec { _incDecMemory :: !Memory, _incDecSize :: !Size }
+
 makeClassy ''Name
 makeLenses ''Load
 makeLenses ''Store
@@ -155,6 +178,7 @@ makeLenses ''GetAddr
 makeLenses ''Call
 makeLenses ''Instruction
 makeLenses ''Block
+makeLenses ''IncDec
 
 instance HasName Block where
     name = blockName
@@ -178,13 +202,18 @@ instance Pretty Name where
 
 instance Pretty Memory where
     pPrint (MemoryLocal i) = braces (int i)
+    pPrint MemoryThis = "this"
+    pPrint (MemoryPointer ptr) = "deref" <> pPrint ptr
     pPrint (MemoryField mem i) = pPrint mem <> char '.' <> int i
-    pPrint (MemoryOffset mem i) = pPrint mem <> brackets (int i)
+    pPrint (MemoryOffset mem i sz) = pPrint mem <> brackets (int i <+> "*" <+> pPrint sz)
+    pPrint (MemoryGlobal i) = "global" <+> pPrint i
 
 instance Pretty Size where
     pPrint Size8 = "8 bits"
     pPrint Size32 = "32 bits"
     pPrint Size64 = "64 bits"
+    pPrint Size0 = "0 bits"
+    pPrint SizePtr = "word"
 
 instance Pretty Load where
     pPrint load = hsep
@@ -269,6 +298,7 @@ instance Pretty InstrPayload where
     pPrint (IGetAddr getAddr) = pPrint getAddr
     pPrint (ICall call) = pPrint call
     pPrint (IIntristic intristic) = pPrint intristic
+    pPrint (IIncDec incdec) = pPrint incdec
 
 instance Pretty Instruction where
     pPrint instr = hsep
@@ -282,12 +312,14 @@ instance Pretty Instruction where
         ]
 
 instance Pretty InstrMetadata where
-    pPrint (InstrComment comment) = text $ BS.unpack comment
+    pPrint (InstrComment comment) = comment
 
 instance Pretty Block where
-    pPrint blk = hang (pPrint (blk ^. name)) 4 body
+    pPrint blk = hang (pPrint (blk ^. name)) 4 $ vat [phis, body, end]
       where
-        body = vcat (map pPrint (blk ^. blockBody)) $$ pPrint (blk ^. blockEnd)
+        phis = vcat . map pPrint $ blk ^. blockPhi
+        body = vcat . map pPrint $ blk ^. blockBody
+        end = pPrint (blk ^. blockEnd)
 
 instance Pretty BlockEnd where
     pPrint (BlockEndBranch target) = "branch to" <+> pPrint target
@@ -301,5 +333,22 @@ instance Pretty BlockEnd where
         ]
     pPrint (BlockEndReturn ret) = "return" <+> pPrint ret
     pPrint BlockEndReturnVoid = "return"
-    pPrint BlockEndCheckUnreachable = "must be unreachable"
+    pPrint BlockEndNone = "must be unreachable"
 
+instance Pretty IncDec where
+    pPrint (Inc mem sz) = sep
+        [ "increment"
+        , pPrint sz
+        , "at"
+        , pPrint mem]
+    pPrint (Dec mem sz) = sep
+        [ "decrement"
+        , pPrint sz
+        , "at"
+        , pPrint mem]
+
+instance Pretty PhiNode where
+    pPrint (PhiNode name branches) = pPrint name <+> "= phi" <+> pPrintList branches
+
+instance Pretty PhiBranch where
+    pPrint (PhiBranch from value) = pPrint from <+> "if from" <+> pPrint value

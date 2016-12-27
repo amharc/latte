@@ -56,15 +56,16 @@ data Type
     | TyBool
     | TyVoid
     | TyString
+    | TyNull
     | TyArray !Type
     | TyClass !Ident
     deriving Show
 
 data Stmt
     = StmtBlock [Located Stmt]
-    | StmtReturn !(Maybe Expr)
-    | StmtInc !Lval
-    | StmtDec !Lval
+    | StmtReturn !(Maybe (Located Expr))
+    | StmtInc !(Located Lval)
+    | StmtDec !(Located Lval)
     | StmtIf !(Located Expr) !(Located Stmt) !(Maybe (Located Stmt))
     | StmtWhile !(Located Expr) !(Located Stmt)
     | StmtFor !Type !Ident !(Located Expr) !(Located Stmt)
@@ -81,7 +82,7 @@ data Expr
     | ExprTrue
     | ExprFalse
     | ExprNull
-    | ExprCall !Lval [Located Expr]
+    | ExprCall !(Located Lval) [Located Expr]
     | ExprUnOp !UnOp !(Located Expr)
     | ExprBinOp !(Located Expr) !BinOp !(Located Expr)
     | ExprNew !Type
@@ -176,8 +177,11 @@ instance Pretty Location where
 instance Pretty LocRange where
     pPrint l = pPrint (l ^. locStart) <> "-" <> pPrint (l ^. locEnd)
 
+instance Pretty a => Pretty (Located a) where
+    pPrint (Loc a) = pPrint a
+
 instance Pretty Program where
-    pPrint (Program decls) = vcat $ map (views obj pPrint) decls
+    pPrint (Program decls) = vcat $ map pPrint decls
 
 instance Pretty TopLevelDecl where
     pPrint (TLDFunc decl) = pPrint decl
@@ -195,11 +199,12 @@ instance Pretty Type where
     pPrint TyBool = "boolean"
     pPrint TyVoid = "void"
     pPrint TyString = "string"
+    pPrint TyNull = "null"
     pPrint (TyArray ty) = pPrint ty <> "[]"
     pPrint (TyClass ident) = pPrint ident
 
 instance Pretty Stmt where
-    pPrint (StmtBlock stmts) = blocked empty (vcat $ map (views obj pPrint) stmts)
+    pPrint (StmtBlock stmts) = blocked empty (vcat $ map pPrint stmts)
     pPrint (StmtReturn Nothing) = "return;"
     pPrint (StmtReturn (Just expr)) = "return" <+> pPrint expr <> semi
     pPrint (StmtInc lval) = pPrint lval <> "++" <> semi
@@ -232,7 +237,7 @@ instance Pretty Expr where
     pPrintPrec _ _ (ExprNew ty) = "new" <+> pPrint ty
     pPrintPrec _ _ (ExprNewArr ty (Loc expr)) = "new" <+> pPrint ty <> brackets (pPrint expr)
     pPrintPrec _ _ (ExprCall ident args) = pPrint ident 
-        <> parens (cat . punctuate comma $ map (views obj pPrint) args)
+        <> parens (cat . punctuate comma $ map pPrint args)
     pPrintPrec _ _ (ExprUnOp oper (Loc expr)) = op' <> pPrint expr
         where
             op' = case oper of
@@ -278,7 +283,7 @@ instance Pretty Lval where
 
 instance Pretty LocalDecl where
     pPrint decl = pPrint (decl ^. localDeclType) 
-        <+> (sep . punctuate comma $ map (views obj pPrint) (decl ^. localDeclItems))
+        <+> (sep . punctuate comma $ map obj (decl ^. localDeclItems))
 
 instance Pretty LocalDeclItem where
     pPrint (LocalDeclItem name Nothing) = pPrint name
@@ -293,7 +298,7 @@ instance Pretty ClassDecl where
                 Nothing -> empty
                 Just b -> "extends" <+> pPrint b
              ])
-        (vcat $ map (views obj pPrint) members)
+        (vcat $ map pPrint members)
 
 instance Pretty ClassMember where
     pPrint (ClassMemberField field) = pPrint field
@@ -309,5 +314,5 @@ blocked :: Doc -> Doc -> Doc
 blocked header body = (header <+> lbrace) $+$ nest 4 body $+$ rbrace
 
 blockedStmts :: Doc -> Stmt -> Doc
-blockedStmts header (StmtBlock stmts) = blocked header (vcat $ views obj pPrint <$> stmts)
+blockedStmts header (StmtBlock stmts) = blocked header (vcat $ pPrint <$> stmts)
 blockedStmts header stmt = blocked header (pPrint stmt)
