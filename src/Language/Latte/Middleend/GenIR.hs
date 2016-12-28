@@ -270,7 +270,7 @@ transExpr    (AST.Located _ (AST.ExprInt i)) = pure (AST.TyInt, OperandInt i)
 transExpr    (AST.Located l (AST.ExprString str)) = do
     name <- mkName Nothing
     internString (mangleString name) str
-    value <- emitInstr Nothing (IGetAddr (GetAddr (MemoryGlobal (nameToIdent name)))) l [InstrComment . pPrint $ BS.unpack str]
+    value <- emitInstr Nothing (IGetAddr . GetAddr . MemoryGlobal $ mangleString name) l [InstrComment . pPrint $ BS.unpack str]
     pure (AST.TyString, OperandNamed value)
 transExpr    (AST.Located _ AST.ExprTrue) = pure (AST.TyBool, OperandInt 1)
 transExpr    (AST.Located _ AST.ExprFalse) = pure (AST.TyBool, OperandInt 0)
@@ -283,6 +283,11 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
         Just (dest, info) -> do
             checkCallArgumentsLength ex (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
             args <- zipWithM prepareArg (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
+            args <- case info ^. funcInfoVtablePos of
+                Nothing -> pure args
+                Just _ -> do
+                    this <- OperandNamed <$> emitInstr Nothing (ILoad $ Load (MemoryArgument 0) SizePtr) l [InstrComment "load this"]
+                    pure (this : args)
             ret <- emitInstr Nothing (ICall $ Call dest args) l [InstrComment $ "call" <+> pPrint ex]
             pure (info ^. funcInfoDecl . AST.obj . AST.funcRetType, OperandNamed ret)
   where
@@ -398,25 +403,28 @@ transExprTypeEqual expectedType expr = do
     pure operand
 
 transLval :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (AST.Type, Memory)
-transLval lval@(AST.Located _ (AST.LvalVar ident)) =
+transLval lval@(AST.Located l (AST.LvalVar ident)) =
     use (girVariables . at ident) >>= \case
         Nothing -> views girCurrentClass (>>= view (classFields . at ident)) >>= \case
             Nothing -> do
                 simpleError lval $ "Unbound variable" <+> pPrint ident
                 pure (AST.TyInt, MemoryLocal 0)
-            Just field ->
-                pure (field ^. classFieldType, MemoryField MemoryThis (field ^. classFieldId))
+            Just field -> do
+                this <- OperandNamed <$> emitInstr Nothing (IGetAddr . GetAddr $ MemoryArgument 0) l []
+                pure (field ^. classFieldType, MemoryOffset this (OperandInt $ field ^. classFieldId) SizePtr)
         Just var -> do
             case var ^. varState of
                 VarUndefined -> simpleError lval $ "Variable referenced before definition"
                 VarUsable -> pure ()
             pure (var ^. varType, memoryOfVariable $ var ^. varLoc)
-transLval lval@(AST.Located _ (AST.LvalArray arrExpr idxExpr)) = do
+transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
     (tyArr, operandArr) <- transExpr arrExpr
     operandIdx <- transExprTypeEqual AST.TyInt idxExpr
     case tyArr of
-        AST.TyArray ty ->
-            pure (ty, MemoryOffset (MemoryPointer operandArr) operandIdx (sizeOf ty))
+        AST.TyArray ty -> do
+            arrData <- OperandNamed <$> emitInstr Nothing
+                (IGetAddr . GetAddr $ MemoryOffset operandArr (OperandInt 1) SizePtr) l [InstrComment "skip length field"]
+            pure (ty, MemoryOffset arrData operandIdx (sizeOf ty))
         ty -> do
             simpleError lval $ "Not an array: " <+> pPrint ty
             pure (AST.TyInt, MemoryLocal 0)
@@ -429,24 +437,28 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
                     simpleError lval $ pPrint className <+> "has no field" <+> pPrint field
                     pure (AST.TyInt, MemoryLocal 0)
                 Just field ->
-                    pure (field ^. classFieldType, MemoryField (MemoryPointer operandObj) (field ^. classFieldId))
+                    pure (field ^. classFieldType, MemoryOffset operandObj (OperandInt $ field ^. classFieldId) SizePtr)
         AST.TyString -> do
             unless (field == "length") . simpleError lval $ "string has no field" <+> pPrint field
-            pure (AST.TyInt, MemoryField (MemoryPointer operandObj) 0)
+            pure $ lengthField operandObj
         AST.TyArray _ -> do
             unless (field == "length") . simpleError lval $ pPrint tyObj <+> "has no field" <+> pPrint field
-            pure (AST.TyInt, MemoryField (MemoryPointer operandObj) 0)
+            pure $ lengthField operandObj
         _ -> do
             simpleError lval $ pPrint tyObj <+> "has no fields"
-            pure (AST.TyInt, MemoryField (MemoryPointer operandObj) 0)
+            pure $ lengthField operandObj
+  where
+    lengthField operandObj = (AST.TyInt, MemoryOffset operandObj (OperandInt 0) SizePtr)
 
-transFunCall :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (Maybe (CallDest, FuncInfo))
-transFunCall (AST.Located _ (AST.LvalVar name)) = view (girFunctions . at name) >>= \case
+transFunCall :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (Maybe (Memory, FuncInfo))
+transFunCall (AST.Located l (AST.LvalVar name)) = view (girFunctions . at name) >>= \case
     Nothing -> pure Nothing
-    Just info -> pure . Just $ case info ^. funcInfoVtablePos of
-        Nothing -> (CallDestFunction (Ident $ AST.getIdent name), info)
-        Just offset -> (CallDestVirtual MemoryThis offset, info)
-transFunCall lval@(AST.Located _ (AST.LvalField objExpr name)) = do
+    Just info -> case info ^. funcInfoVtablePos of
+        Nothing -> pure $ Just (MemoryGlobal $ mangle Nothing name, info)
+        Just offset -> do
+            addr <- virtualFuncAddr l (MemoryArgument 0) offset
+            pure $ Just (addr, info)
+transFunCall lval@(AST.Located l (AST.LvalField objExpr name)) = do
     (objTy, objOperand) <- transExpr objExpr
     case objTy of
         AST.TyClass className ->
@@ -454,8 +466,9 @@ transFunCall lval@(AST.Located _ (AST.LvalField objExpr name)) = do
                 Nothing -> do
                     simpleError lval $ pPrint className <+> "has no method" <+> pPrint name
                     pure Nothing
-                Just info ->
-                    pure $ Just (CallDestVirtual (MemoryPointer objOperand) (info ^. funcInfoVtablePos . singular _Just), info)
+                Just info -> do
+                    addr <- virtualFuncAddr l (MemoryPointer objOperand) (info ^. funcInfoVtablePos . singular _Just)
+                    pure $ Just (addr, info)
         _ -> do
             simpleError lval $ "not a class"
             pure Nothing
@@ -463,6 +476,13 @@ transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
     simpleError lval "Not a function"
     pure Nothing
 
+virtualFuncAddr :: GIRMonad m => AST.LocRange -> Memory -> Int -> m Memory
+virtualFuncAddr l objMem idx = do
+    obj <- OperandNamed <$> emitInstr (Just "object") (ILoad $ Load objMem SizePtr)
+        l [InstrComment "load object pointer"]
+    vtablePtr <- OperandNamed <$> emitInstr (Just "vtable") (ILoad $ Load (MemoryOffset obj (OperandInt 0) SizePtr) SizePtr)
+        l [InstrComment "load vtable ptr"]
+    pure $ MemoryOffset vtablePtr (OperandInt idx) SizePtr
 
 transFuncDecl :: (HasCallStack, GIRMonad m) => Maybe AST.Ident -> AST.Located AST.FuncDecl -> m ()
 transFuncDecl mClass locDecl@(AST.Located l decl) = do

@@ -17,7 +17,7 @@ import System.IO
 middle :: P.Program -> IO ()
 middle program = do
     putStrLn "Parsed:"
-    putStrLn . renderStyle style{mode=LeftMode} $ pPrint program
+    putStrLn . render $ pPrint program
 
     diags <- M.run $ do
         M.generateIR program

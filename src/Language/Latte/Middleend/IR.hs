@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Middleend.IR where
@@ -50,12 +51,12 @@ data Name = Name
 data Memory
     = MemoryLocal {-# UNPACK #-} !Int
     | MemoryArgument {-# UNPACK #-} !Int
-    | MemoryThis
-    | MemoryPointer !Operand
-    | MemoryField !Memory {-# UNPACK #-} !Int
-    | MemoryOffset !Memory !Operand !Size
+    | MemoryOffset !Operand !Operand !Size
     | MemoryGlobal !Ident
     deriving Show
+
+pattern MemoryPointer :: Operand -> Memory
+pattern MemoryPointer ptr = MemoryOffset ptr (OperandInt 0) SizePtr
 
 data Size = Size8 | Size32 | Size64 | Size0 | SizePtr
     deriving Show
@@ -138,14 +139,9 @@ newtype GetAddr = GetAddr { _getAddrMem :: Memory }
     deriving Show
 
 data Call = Call
-    { _callDest :: !CallDest
+    { _callDest :: !Memory
     , _callArgs :: [Operand]
     }
-    deriving Show
-
-data CallDest
-    = CallDestFunction !Ident
-    | CallDestVirtual !Memory !Int
     deriving Show
 
 data BinOperator
@@ -227,10 +223,7 @@ instance Pretty Name where
 instance Pretty Memory where
     pPrint (MemoryLocal i) = "local" <+> int i
     pPrint (MemoryArgument i) = "argument" <+> int i
-    pPrint MemoryThis = "this"
-    pPrint (MemoryPointer ptr) = "deref" <+> pPrint ptr
-    pPrint (MemoryField mem i) = "field" <+> int i <+> "of" <+> pPrint mem
-    pPrint (MemoryOffset mem i sz) = pPrint mem <> brackets (pPrint i <+> "*" <+> pPrint sz)
+    pPrint (MemoryOffset mem i sz) = pPrint mem <+> "+" <+> pPrint i <+> "*" <+> pPrint sz
     pPrint (MemoryGlobal i) = "global" <+> pPrint i
 
 instance Pretty Size where
@@ -296,10 +289,6 @@ instance Pretty GetAddr where
 
 instance Pretty Call where
     pPrint call = "call" <+> pPrint (call ^. callDest) <> parens (sep . punctuate comma $ map pPrint (call ^. callArgs))
-
-instance Pretty CallDest where
-    pPrint (CallDestFunction fun) = pPrint fun
-    pPrint (CallDestVirtual memory i) = "virtual" <+> pPrint memory <> colon <> int i
 
 instance Pretty Intristic where
     pPrint (IntristicAlloc size ty) = "alloc" <+> pPrint size <+> "bytes of" <+> pPrint ty
