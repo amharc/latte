@@ -75,78 +75,8 @@ runInstruction acc instr = do
     valueOf (UnOp UnOpNot (OperandInt i)) = Just . OperandInt $ 1 - i
     valueOf _ = Nothing
 
-class ApplySubst a where
-    applySubst :: Substitution -> a -> a
-
-instance ApplySubst Operand where
-    applySubst subst op@(OperandNamed name) = fromMaybe op $ Map.lookup name subst
-    applySubst _ op = op
-
-instance ApplySubst Memory where
-    applySubst subst (MemoryOffset base idx sz) =
-        MemoryOffset (applySubst subst base) (applySubst subst idx) sz
-    applySubst _ mem = mem
-
-instance ApplySubst BlockEnd where
-    applySubst subst (BlockEndBranchCond cond true false) =
-        BlockEndBranchCond (applySubst subst cond) true false
-    applySubst subst (BlockEndReturn ret) = BlockEndReturn (applySubst subst ret)
-    applySubst _ end = end
-
-instance ApplySubst PhiBranch where
-    applySubst subst = phiValue %~ applySubst subst
-
-instance ApplySubst PhiNode where
-    applySubst subst = phiBranches %~ applySubst subst
-
-instance ApplySubst a => ApplySubst [a] where
-    applySubst = fmap . applySubst
-
-instance ApplySubst a => ApplySubst (Seq.Seq a) where
-    applySubst = fmap . applySubst
-
-instance ApplySubst Load where
-    applySubst subst = loadFrom %~ applySubst subst
-
-instance ApplySubst Store where
-    applySubst subst store = store
-        & storeTo %~ applySubst subst
-        & storeValue %~ applySubst subst
-
-instance ApplySubst BinOp where
-    applySubst subst binop = binop
-        & binOpLhs %~ applySubst subst
-        & binOpRhs %~ applySubst subst
-
-instance ApplySubst UnOp where
-    applySubst subst = unOpArg %~ applySubst subst
-
-instance ApplySubst GetAddr where
-    applySubst subst = getAddrMem %~ applySubst subst
-
-instance ApplySubst Call where
-    applySubst subst call = call
-        & callDest %~ applySubst subst
-        & callArgs %~ applySubst subst
-
-instance ApplySubst Intristic where
-    applySubst subst (IntristicAlloc op ot) = IntristicAlloc (applySubst subst op) ot
-    applySubst subst (IntristicClone mem) = IntristicClone $ applySubst subst mem
-    applySubst subst (IntristicConcat lhs rhs) = IntristicConcat (applySubst subst lhs) (applySubst subst rhs)
-
-instance ApplySubst IncDec where
-    applySubst subst = incDecMemory %~ applySubst subst
-
-instance ApplySubst InstrPayload where
-    applySubst subst (ILoad load) = ILoad $ applySubst subst load
-    applySubst subst (IStore store) = IStore $ applySubst subst store
-    applySubst subst (IBinOp binOp) = IBinOp $ applySubst subst binOp
-    applySubst subst (IUnOp unOp) = IUnOp $ applySubst subst unOp
-    applySubst subst (ICall call) = ICall $ applySubst subst call
-    applySubst subst (IIntristic intristic) = IIntristic $ applySubst subst intristic
-    applySubst subst (IIncDec incdec) = IIncDec $ applySubst subst incdec
-    applySubst subst (IConst const) = IConst $ applySubst subst const
-    applySubst subst (IGetAddr getaddr) = IGetAddr $ applySubst subst getaddr
-
-instance ApplySubst Instruction where
-    applySubst subst = instrPayload %~ applySubst subst
+applySubst :: HasOperands a => Substitution -> a -> a
+applySubst subst = operands %~ mut
+  where
+    mut o@(OperandNamed name) = fromMaybe o $ Map.lookup name subst
+    mut o = o

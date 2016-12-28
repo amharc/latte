@@ -227,6 +227,8 @@ makeLenses ''UnOp
 makeLenses ''GetAddr
 makeLenses ''Call
 makePrisms ''InstrPayload
+makePrisms ''Operand
+makePrisms ''Memory
 makeLenses ''Instruction
 makeLenses ''Block
 makeLenses ''IncDec
@@ -451,3 +453,71 @@ reachableBlocks start = go (Seq.singleton start) Set.empty
 
 nameToIdent :: Name -> Ident
 nameToIdent name = Ident . BS.pack $ '.' : show (views nameUnique getUniqueId name)
+
+class HasOperands a where
+    operands :: Traversal' a Operand 
+
+instance HasOperands Operand where
+    operands = id
+
+instance HasOperands Memory where
+    operands f (MemoryOffset base idx sz) = MemoryOffset <$> operands f base <*> operands f idx <*> pure sz
+    operands _ o = pure o
+
+instance HasOperands BlockEnd where
+    operands f (BlockEndBranchCond cond true false) = BlockEndBranchCond <$> operands f cond <*> pure true <*> pure false
+    operands f (BlockEndReturn ret) = BlockEndReturn <$> operands f ret
+    operands _ o = pure o
+
+instance HasOperands PhiBranch where
+    operands f (PhiBranch from value) = PhiBranch <$> pure from <*> operands f value
+
+instance HasOperands PhiNode where
+    operands f (PhiNode name branches) = PhiNode <$> pure name <*> operands f branches
+
+instance HasOperands a => HasOperands [a] where
+    operands = traverse . operands
+
+instance HasOperands a => HasOperands (Seq.Seq a) where
+    operands = traverse . operands
+
+instance HasOperands Load where
+    operands f (SLoad from size) = SLoad <$> operands f from <*> pure size
+
+instance HasOperands Store where
+    operands f (SStore to size value) = SStore <$> operands f to <*> pure size <*> operands f value
+
+instance HasOperands BinOp where
+    operands f (SBinOp lhs op rhs) = SBinOp <$> operands f lhs <*> pure op <*> operands f rhs
+
+instance HasOperands UnOp where
+    operands f (SUnOp op arg) = SUnOp <$> pure op <*> operands f arg
+
+instance HasOperands GetAddr where
+    operands f (SGetAddr mem) = SGetAddr <$> operands f mem
+
+instance HasOperands Call where
+    operands f (SCall dest args) = SCall <$> operands f dest <*> operands f args
+
+instance HasOperands Intristic where
+    operands f (IntristicAlloc op ot) = IntristicAlloc <$> operands f op <*> pure ot
+    operands f (IntristicClone mem) = IntristicClone <$> operands f mem
+    operands f (IntristicConcat lhs rhs) = IntristicConcat <$> operands f lhs <*> operands f rhs
+
+instance HasOperands IncDec where
+    operands f (SInc mem size) = SInc <$> operands f mem <*> pure size
+    operands f (SDec mem size) = SDec <$> operands f mem <*> pure size
+
+instance HasOperands InstrPayload where
+    operands f (ILoad load) = ILoad <$> operands f load
+    operands f (IStore store) = IStore <$> operands f store
+    operands f (IBinOp binOp) = IBinOp <$> operands f binOp
+    operands f (IUnOp unOp) = IUnOp <$> operands f unOp
+    operands f (ICall call) = ICall <$> operands f call
+    operands f (IIntristic intristic) = IIntristic <$> operands f intristic
+    operands f (IIncDec incdec) = IIncDec <$> operands f incdec
+    operands f (IConst const) = IConst <$> operands f const
+    operands f (IGetAddr getaddr) = IGetAddr <$> operands f getaddr
+
+instance HasOperands Instruction where
+    operands f (Instruction result payload meta) = Instruction <$> pure result <*> operands f payload <*> pure meta
