@@ -24,6 +24,7 @@ newtype Ident = Ident { getIdent :: BS.ByteString }
 
 data Operand
     = OperandNamed !Name
+    | OperandSize !Size
     | OperandInt !Int
     deriving Show
 
@@ -75,6 +76,7 @@ data Block = Block
     , _blockBody :: {-# UNPACK #-} !(IORef (Seq.Seq Instruction))
     , _blockEnd :: {-# UNPACK #-} !(IORef BlockEnd)
     }
+    deriving Eq
 
 data PhiNode = PhiNode
     { _phiName :: !Name
@@ -155,7 +157,7 @@ data UnOperator
     deriving Show
 
 data Intristic
-    = IntristicAlloc {-# UNPACK #-} !Int !ObjectType
+    = IntristicAlloc !Operand !ObjectType
     | IntristicConcat !Operand !Operand
     deriving Show
 
@@ -200,17 +202,18 @@ instance Pretty UniqueId where
 instance Pretty Operand where
     pPrint (OperandNamed n) = pPrint n
     pPrint (OperandInt i) = int i
+    pPrint (OperandSize sz) = "sizeof" <+> pPrint sz
 
 instance Pretty Name where
     pPrint (Name i Nothing) = char '%' <> pPrint i
     pPrint (Name i (Just n)) = char '%' <> pPrint n <> char '.' <> pPrint i
 
 instance Pretty Memory where
-    pPrint (MemoryLocal i) = "local" <> int i
-    pPrint (MemoryArgument i) = "argument" <> int i
+    pPrint (MemoryLocal i) = "local" <+> int i
+    pPrint (MemoryArgument i) = "argument" <+> int i
     pPrint MemoryThis = "this"
-    pPrint (MemoryPointer ptr) = "deref" <> pPrint ptr
-    pPrint (MemoryField mem i) = pPrint mem <> char '.' <> int i
+    pPrint (MemoryPointer ptr) = "deref" <+> pPrint ptr
+    pPrint (MemoryField mem i) = "field" <+> int i <+> "of" <+> pPrint mem
     pPrint (MemoryOffset mem i sz) = pPrint mem <> brackets (pPrint i <+> "*" <+> pPrint sz)
     pPrint (MemoryGlobal i) = "global" <+> pPrint i
 
@@ -283,7 +286,7 @@ instance Pretty CallDest where
     pPrint (CallDestVirtual memory i) = "virtual" <+> pPrint memory <> colon <> int i
 
 instance Pretty Intristic where
-    pPrint (IntristicAlloc size ty) = "alloc" <+> int size <+> "bytes of" <+> pPrint ty
+    pPrint (IntristicAlloc size ty) = "alloc" <+> pPrint size <+> "bytes of" <+> pPrint ty
     pPrint (IntristicConcat lhs rhs) = "concat" <+> pPrint lhs <> comma <+> pPrint rhs
 
 instance Pretty ObjectType where

@@ -50,6 +50,7 @@ data ClassInfo = ClassInfo
     { _classInfoDecl :: AST.ClassDecl
     , _classFields :: Map.Map AST.Ident ClassField
     , _classMethods :: Map.Map AST.Ident FuncInfo
+    , _classSize :: {-# UNPACK #-} !Int
     }
 
 data ClassField = ClassField
@@ -63,11 +64,10 @@ data Variable = Variable
     { _varType :: !AST.Type
     , _varLoc :: VariableLoc
     , _varState :: !VarState
+    , _varDefinedIn :: Maybe Block
     }
-    deriving Show
 
 data VariableLoc = VariableLocal !Int | VariableArgument !Int
-    deriving Show
 
 data VarState
     = VarUsable
@@ -133,16 +133,18 @@ transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
   where
     addDecl decl = forM_ (decl ^. AST.obj ^. AST.localDeclItems) $ \item -> do
         ident <- girVariableCnt <<+= 1
+        block <- use girCurrentBlock
 
         use (girVariables . at (item ^. AST.obj ^. AST.localDeclName)) >>= \case
-            Just var | var ^. varState == VarUndefined ->
-                simpleError item $ "Duplicate definition of a variable"
+            Just var | var ^. varDefinedIn == Just block ->
+                simpleError item $ "Duplicate definition of variable"
             _ -> pure ()
 
         girVariables . at (item ^. AST.obj ^. AST.localDeclName) ?= Variable
             { _varType = decl ^. AST.obj ^. AST.localDeclType
             , _varLoc = VariableLocal ident
             , _varState = VarUndefined
+            , _varDefinedIn = Just block
             }
 transStmt st@(AST.Located l (AST.StmtAssign lval expr)) = do
     (lvalTy, lvalMem) <- transLval lval
@@ -204,7 +206,35 @@ transStmt st@(AST.Located l (AST.StmtWhile cond body)) = do
         setEnd $ BlockEndBranch condBlock
 
     switchToBlock endBlock
-transStmt st@(AST.Located l (AST.StmtFor ty idx array body)) = undefined -- TODO
+transStmt st@(AST.Located l (AST.StmtFor ty idx array body)) = transStmt $
+    AST.Located l $ AST.StmtBlock [declareIndex, declareArray, while]
+  where
+    declareIndex = arrLoc . AST.StmtDecl $ AST.LocalDecl AST.TyInt
+            [arrLoc $ AST.LocalDeclItem "$idx" Nothing]
+
+    declareArray = arrLoc . AST.StmtDecl $ AST.LocalDecl (AST.TyArray ty)
+            [arrLoc $ AST.LocalDeclItem "$arr" (Just array)]
+
+    while = stLoc $ AST.StmtWhile (stLoc whileCond) (stLoc whileBody)
+
+    whileCond = AST.ExprBinOp
+        (arrLoc . AST.ExprLval $ AST.LvalVar "$idx")
+        AST.BinOpLess
+        (arrLoc . AST.ExprLval $ AST.LvalField (arrLoc . AST.ExprLval $ AST.LvalVar "$arr") "length")
+
+    whileBody = AST.StmtBlock
+        [ arrLoc . AST.StmtDecl $ AST.LocalDecl ty
+            [arrLoc . AST.LocalDeclItem idx $ Just (arrLoc . AST.ExprLval $
+                AST.LvalArray
+                    (arrLoc . AST.ExprLval $ AST.LvalVar "$arr")
+                    (arrLoc . AST.ExprLval $ AST.LvalVar "$idx"))
+            ]
+        , body
+        ]
+
+    arrLoc = AST.Located (array ^. AST.loc)
+    stLoc = AST.Located l
+
 transStmt st@(AST.Located l (AST.StmtExpr expr)) = void $ transExpr (AST.Located l expr)
 transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> forM_ (decl ^. AST.localDeclItems) go
   where
@@ -330,8 +360,29 @@ transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
     intOp AST.BinOpGreater = Just (AST.TyBool, BinOpGreater)
     intOp AST.BinOpGreaterEqual = Just (AST.TyBool, BinOpGreaterEqual)
     intOp _ = Nothing
-transExpr ex@(AST.Located _ (AST.ExprNew ty)) = undefined
-transExpr ex@(AST.Located _ (AST.ExprNewArr ty len)) = undefined
+transExpr ex@(AST.Located l (AST.ExprNew ty)) = do
+    checkType ex ty
+    case ty of
+        AST.TyClass name -> do
+            size <- view (girClasses . at name . singular _Just . classSize)
+            val <- emitInstr Nothing (IIntristic (IntristicAlloc (OperandInt size) (ObjectClass $ coerce name)))
+                    l [InstrComment $ pPrint ex]
+            pure (ty, OperandNamed val)
+        _ -> do
+            simpleError ex $ "Not a class type:" <+> pPrint ty
+            pure (AST.TyNull, OperandInt 0)
+transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
+    checkType ex ty
+    lenOperand <- transExprTypeEqual AST.TyInt lenExpr
+    sizeOperand <- OperandNamed <$> emitInstr Nothing (IBinOp (BinOp lenOperand BinOpTimes (OperandSize $ sizeOf ty))) l []
+    val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOperand objectType)) l [InstrComment $ pPrint ex]
+    pure (AST.TyArray ty, OperandNamed val)
+  where
+    objectType = case ty of
+        AST.TyArray _ -> ObjectArray
+        AST.TyClass _ -> ObjectArray
+        _ -> ObjectPrimArray
+
 transExpr ex@(AST.Located _ (AST.ExprCast targetTy expr)) = do
     (ty, operand) <- transExpr expr
     checkTypeImplicitConv ex targetTy ty
@@ -434,6 +485,7 @@ transFuncDecl locDecl@(AST.Located l decl) = do
             { _varType = arg ^. AST.funArgType
             , _varLoc = VariableArgument idx
             , _varState = VarUndefined
+            , _varDefinedIn = Nothing
             }
 
     markAsUsable arg = girVariables . at (arg ^. AST.funArgName) . singular _Just . varState .= VarUsable
