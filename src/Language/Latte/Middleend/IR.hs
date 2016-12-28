@@ -109,40 +109,58 @@ data BlockEnd
     | BlockEndReturnVoid
     | BlockEndNone
 
-data Load = Load
+data Load = SLoad
     { _loadFrom :: !Memory
     , _loadSize :: !Size
     }
     deriving Show
 
-data Store = Store
+pattern Load :: Memory -> Size -> InstrPayload
+pattern Load from size = ILoad (SLoad from size)
+
+data Store = SStore
     { _storeTo :: !Memory
     , _storeSize :: !Size
     , _storeValue :: !Operand
     }
     deriving Show
 
-data BinOp = BinOp
+pattern Store :: Memory -> Size -> Operand -> InstrPayload
+pattern Store to size value = IStore (SStore to size value)
+
+data BinOp = SBinOp
     { _binOpLhs :: !Operand
     , _binOpOp ::  !BinOperator
     , _binOpRhs :: !Operand
     }
     deriving Show
 
-data UnOp = UnOp
+pattern BinOp :: Operand -> BinOperator -> Operand -> InstrPayload
+pattern BinOp lhs op rhs = IBinOp (SBinOp lhs op rhs)
+
+data UnOp = SUnOp
     { _unOpOp :: !UnOperator
     , _unOpArg :: !Operand
     }
     deriving Show
 
-newtype GetAddr = GetAddr { _getAddrMem :: Memory }
+pattern UnOp :: UnOperator -> Operand -> InstrPayload
+pattern UnOp op arg = IUnOp (SUnOp op arg)
+
+newtype GetAddr = SGetAddr { _getAddrMem :: Memory }
     deriving Show
 
-data Call = Call
+pattern GetAddr :: Memory -> InstrPayload
+pattern GetAddr mem = IGetAddr (SGetAddr mem)
+
+data Call = SCall
     { _callDest :: !Memory
     , _callArgs :: [Operand]
     }
     deriving Show
+
+pattern Call :: Memory -> [Operand] -> InstrPayload
+pattern Call dest args = ICall (SCall dest args)
 
 data BinOperator
     = BinOpPlus

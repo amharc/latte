@@ -154,7 +154,7 @@ transStmt st@(AST.Located l (AST.StmtAssign lval expr)) = do
     (lvalTy, lvalMem) <- transLval lval
     (exprTy, exprOperand) <- transExpr expr
     checkTypeImplicitConv st lvalTy exprTy
-    void $ emitInstr Nothing (IStore $ Store lvalMem (sizeOf lvalTy) exprOperand) l [InstrComment $ pPrint st]
+    void $ emitInstr Nothing (Store lvalMem (sizeOf lvalTy) exprOperand) l [InstrComment $ pPrint st]
 transStmt st@(AST.Located l stmt@(AST.StmtReturn Nothing)) =
     view (girCurrentFunction . singular _Just . AST.funcRetType) >>= \case
         AST.TyVoid -> setEnd BlockEndReturnVoid
@@ -252,25 +252,25 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
             Just expr -> transExpr expr
             Nothing -> case expectedType of
                 AST.TyString -> do
-                    emptyStr <- emitInstr (Just "emptyString") (IGetAddr (GetAddr $ MemoryGlobal "LATC_emptyString")) li []
+                    emptyStr <- emitInstr (Just "emptyString") (GetAddr $ MemoryGlobal "LATC_emptyString") li []
                     pure (AST.TyString, OperandNamed emptyStr)
                 _ -> pure (expectedType, OperandInt 0)
         checkTypeImplicitConv locItem expectedType ty
         void $ emitInstr Nothing
-            (IStore (Store (memoryOfVariable $ var ^. varLoc) (sizeOf ty) operand))
+            (Store (memoryOfVariable $ var ^. varLoc) (sizeOf ty) operand)
             li [InstrComment $ "initialize" <+> pPrint item]
 transStmt st@(AST.Located l AST.StmtNone) = pure ()
 
 transExpr :: (HasCallStack, GIRMonad m) => AST.Located AST.Expr -> m (AST.Type, Operand)
 transExpr   (AST.Located l (AST.ExprLval lval)) = do
     (ty, memory) <- transLval (AST.Located l lval)
-    value <- emitInstr Nothing (ILoad (Load memory (sizeOf ty))) l [InstrComment $ "load" <+> pPrint lval]
+    value <- emitInstr Nothing (Load memory (sizeOf ty)) l [InstrComment $ "load" <+> pPrint lval]
     pure (ty, OperandNamed value)
 transExpr    (AST.Located _ (AST.ExprInt i)) = pure (AST.TyInt, OperandInt i)
 transExpr    (AST.Located l (AST.ExprString str)) = do
     name <- mkName Nothing
     internString (mangleString name) str
-    value <- emitInstr Nothing (IGetAddr . GetAddr . MemoryGlobal $ mangleString name) l [InstrComment . pPrint $ BS.unpack str]
+    value <- emitInstr Nothing (GetAddr . MemoryGlobal $ mangleString name) l [InstrComment . pPrint $ BS.unpack str]
     pure (AST.TyString, OperandNamed value)
 transExpr    (AST.Located _ AST.ExprTrue) = pure (AST.TyBool, OperandInt 1)
 transExpr    (AST.Located _ AST.ExprFalse) = pure (AST.TyBool, OperandInt 0)
@@ -286,9 +286,9 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
             args <- case info ^. funcInfoVtablePos of
                 Nothing -> pure args
                 Just _ -> do
-                    this <- OperandNamed <$> emitInstr Nothing (ILoad $ Load (MemoryArgument 0) SizePtr) l [InstrComment "load this"]
+                    this <- OperandNamed <$> emitInstr Nothing (Load (MemoryArgument 0) SizePtr) l [InstrComment "load this"]
                     pure (this : args)
-            ret <- emitInstr Nothing (ICall $ Call dest args) l [InstrComment $ "call" <+> pPrint ex]
+            ret <- emitInstr Nothing (Call dest args) l [InstrComment $ "call" <+> pPrint ex]
             pure (info ^. funcInfoDecl . AST.obj . AST.funcRetType, OperandNamed ret)
   where
      prepareArg :: GIRMonad m => AST.Located AST.FunArg -> AST.Located AST.Expr -> m Operand
@@ -298,11 +298,11 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
         pure operand
 transExpr ex@(AST.Located l (AST.ExprUnOp AST.UnOpNot arg)) = do
     operand <- transExprTypeEqual AST.TyBool arg
-    ret <- emitInstr (Just "not") (IUnOp (UnOp UnOpNot operand)) l []
+    ret <- emitInstr (Just "not") (UnOp UnOpNot operand) l []
     pure (AST.TyBool, OperandNamed ret)
 transExpr ex@(AST.Located l (AST.ExprUnOp AST.UnOpNeg arg)) = do
     operand <- transExprTypeEqual AST.TyInt arg
-    ret <- emitInstr (Just "neg") (IUnOp (UnOp UnOpNeg operand)) l []
+    ret <- emitInstr (Just "neg") (UnOp UnOpNeg operand) l []
     pure (AST.TyInt, OperandNamed ret)
 transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpAnd rhs)) = do
     endBlock <- newBlock "andEnd"
@@ -341,7 +341,7 @@ transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
     (tyRhs, operandRhs) <- transExpr rhs
 
     let emit op = OperandNamed <$> 
-            emitInstr Nothing (IBinOp (BinOp operandLhs op operandRhs)) l [InstrComment $ pPrint ex]
+            emitInstr Nothing (BinOp operandLhs op operandRhs) l [InstrComment $ pPrint ex]
 
     case (tyLhs, op, tyRhs) of
         (_, AST.BinOpEqual, _) -> do
@@ -382,7 +382,7 @@ transExpr ex@(AST.Located l (AST.ExprNew ty)) = do
 transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
     checkType ex ty
     lenOperand <- transExprTypeEqual AST.TyInt lenExpr
-    sizeOperand <- OperandNamed <$> emitInstr Nothing (IBinOp (BinOp lenOperand BinOpTimes (OperandSize $ sizeOf ty))) l []
+    sizeOperand <- OperandNamed <$> emitInstr Nothing (BinOp lenOperand BinOpTimes (OperandSize $ sizeOf ty)) l []
     val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOperand objectType)) l [InstrComment $ pPrint ex]
     pure (AST.TyArray ty, OperandNamed val)
   where
@@ -410,7 +410,7 @@ transLval lval@(AST.Located l (AST.LvalVar ident)) =
                 simpleError lval $ "Unbound variable" <+> pPrint ident
                 pure (AST.TyInt, MemoryLocal 0)
             Just field -> do
-                this <- OperandNamed <$> emitInstr Nothing (IGetAddr . GetAddr $ MemoryArgument 0) l []
+                this <- OperandNamed <$> emitInstr Nothing (GetAddr $ MemoryArgument 0) l []
                 pure (field ^. classFieldType, MemoryOffset this (OperandInt $ field ^. classFieldId) SizePtr)
         Just var -> do
             case var ^. varState of
@@ -423,7 +423,7 @@ transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
     case tyArr of
         AST.TyArray ty -> do
             arrData <- OperandNamed <$> emitInstr Nothing
-                (IGetAddr . GetAddr $ MemoryOffset operandArr (OperandInt 1) SizePtr) l [InstrComment "skip length field"]
+                (GetAddr $ MemoryOffset operandArr (OperandInt 1) SizePtr) l [InstrComment "skip length field"]
             pure (ty, MemoryOffset arrData operandIdx (sizeOf ty))
         ty -> do
             simpleError lval $ "Not an array: " <+> pPrint ty
@@ -478,9 +478,9 @@ transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
 
 virtualFuncAddr :: GIRMonad m => AST.LocRange -> Memory -> Int -> m Memory
 virtualFuncAddr l objMem idx = do
-    obj <- OperandNamed <$> emitInstr (Just "object") (ILoad $ Load objMem SizePtr)
+    obj <- OperandNamed <$> emitInstr (Just "object") (Load objMem SizePtr)
         l [InstrComment "load object pointer"]
-    vtablePtr <- OperandNamed <$> emitInstr (Just "vtable") (ILoad $ Load (MemoryOffset obj (OperandInt 0) SizePtr) SizePtr)
+    vtablePtr <- OperandNamed <$> emitInstr (Just "vtable") (Load (MemoryOffset obj (OperandInt 0) SizePtr) SizePtr)
         l [InstrComment "load vtable ptr"]
     pure $ MemoryOffset vtablePtr (OperandInt idx) SizePtr
 
