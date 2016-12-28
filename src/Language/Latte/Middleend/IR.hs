@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -11,7 +12,9 @@ import Control.Lens
 import Control.Monad.IO.Class
 import qualified Data.ByteString.Char8 as BS
 import Data.Foldable
+import Data.Function
 import Data.IORef
+import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
 import Data.String
@@ -237,6 +240,9 @@ makeLenses ''ObjectField
 makeLenses ''PhiNode
 makeLenses ''PhiBranch
 
+instance Ord Block where
+    compare = compare `on` _blockName
+
 instance HasName Block where
     name = blockName
 
@@ -450,6 +456,12 @@ reachableBlocks start = go (Seq.singleton start) Set.empty
     add (queue, set) block
         | Set.member (block ^. blockName) set = (queue, set)
         | otherwise = (queue |> block, Set.insert (block ^. blockName) set)
+
+predecessors :: MonadIO m => [Block] -> m (Map.Map Block [Block])
+predecessors = foldlM go Map.empty
+  where
+    go acc block = foldl (add block) acc <$> successors block
+    add block acc successor = acc & at successor . non [] %~ cons block
 
 nameToIdent :: Name -> Ident
 nameToIdent name = Ident . BS.pack $ '.' : show (views nameUnique getUniqueId name)

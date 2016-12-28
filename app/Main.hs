@@ -9,6 +9,8 @@ import qualified Language.Latte.Middleend.GenIR as M
 import qualified Language.Latte.Middleend.Monad as M
 import qualified Language.Latte.Middleend.MemToReg as MemToReg
 import qualified Language.Latte.Middleend.SimplifyPhi as SimplifyPhi
+import qualified Language.Latte.Middleend.SimplifyControlFlow as SimplifyControlFlow
+import qualified Language.Latte.Middleend.ShrinkEnds as ShrinkEnds
 import qualified Language.Latte.Middleend.Propagate as Propagate
 import qualified Language.Latte.Middleend.Fixed as Fixed
 import Text.Parsec.ByteString
@@ -31,12 +33,20 @@ middle program = do
         M.debugState >>= liftIO . putStrLn . render 
 
         Fixed.iterOpt 1000 $ do
-            liftIO $ putStrLn "\n\nSimplifyPhi\n\n"
+            liftIO $ putStr "\n\nSimplifyPhi\n\n"
             SimplifyPhi.opt
             M.debugState >>= liftIO . putStrLn . render 
 
-            liftIO $ putStrLn "\n\nPropagate\n\n"
+            liftIO $ putStr "\n\nShrinkEnds\n\n"
+            ShrinkEnds.opt
+            M.debugState >>= liftIO . putStrLn . render 
+
+            liftIO $ putStr "\n\nPropagate\n\n"
             Propagate.opt
+            M.debugState >>= liftIO . putStrLn . render 
+
+            liftIO $ putStr "\n\nSimplify control flow\n\n"
+            SimplifyControlFlow.opt
             M.debugState >>= liftIO . putStrLn . render 
 
     forM_ diags $ \diag ->

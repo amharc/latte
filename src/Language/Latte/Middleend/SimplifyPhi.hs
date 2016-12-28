@@ -16,15 +16,17 @@ opt :: (MonadIO m, MonadState s m, HasMiddleEndState s) => m ()
 opt = use meFunctions >>= mapM_ runFunction
 
 runFunction :: (MonadIO m) => FunctionDescriptor -> m ()
-runFunction desc = reachableBlocks (desc ^. funcEntryBlock) >>= mapM_ runBlock
+runFunction desc = do
+    blocks <- reachableBlocks (desc ^. funcEntryBlock) 
+    mapM_ (runBlock $ Set.fromList blocks) blocks
 
-runBlock :: (MonadIO m) => Block -> m ()
-runBlock block = liftIO $ readIORef ioref >>= updatePhis block >>= writeIORef ioref
+runBlock :: (MonadIO m) => Set.Set Block -> Block -> m ()
+runBlock blocks block = liftIO $ readIORef ioref >>= updatePhis blocks block >>= writeIORef ioref
   where
     ioref = block ^. blockPhi
 
-updatePhis :: (MonadIO m) => Block -> Seq.Seq PhiNode -> m (Seq.Seq PhiNode)
-updatePhis block = foldrM go Seq.empty
+updatePhis :: (MonadIO m) => Set.Set Block -> Block -> Seq.Seq PhiNode -> m (Seq.Seq PhiNode)
+updatePhis blocks block = foldrM go Seq.empty
   where
     go node acc = (filterM incoming $ node ^. phiBranches) >>= \case
         [] -> push (node ^. name) OperandUndef >> pure acc
@@ -35,6 +37,7 @@ updatePhis block = foldrM go Seq.empty
 
     incoming branch 
         | OperandUndef <- branch ^. phiValue = pure False
+        | not (Set.member (branch ^. phiFrom) blocks) = pure False
         | otherwise = do
             succs <- successors $ branch ^. phiFrom
             pure $ block `elem` succs
