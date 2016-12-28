@@ -17,8 +17,10 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Data.Coerce
 import Data.IORef
+import Data.Foldable
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
 import GHC.Stack
 import qualified Language.Latte.Frontend.AST as AST
@@ -36,7 +38,7 @@ data GIRState = GIRState
 
 data GIREnv = GIREnv
     { _girCurrentFunction :: Maybe AST.FuncDecl
-    , _girCurrentClass :: Maybe AST.ClassDecl
+    , _girCurrentClass :: Maybe ClassInfo
     , _girFunctions :: Map.Map AST.Ident FuncInfo
     , _girClasses :: Map.Map AST.Ident ClassInfo
     }
@@ -47,10 +49,12 @@ data FuncInfo = FuncInfo
     }
 
 data ClassInfo = ClassInfo
-    { _classInfoDecl :: AST.ClassDecl
+    { _classInfoDecl :: AST.Located AST.ClassDecl
     , _classFields :: Map.Map AST.Ident ClassField
     , _classMethods :: Map.Map AST.Ident FuncInfo
-    , _classSize :: {-# UNPACK #-} !Int
+    , _classBase :: Maybe ClassInfo
+    , _classObjFields :: Seq.Seq AST.Type
+    , _classObjVtable :: Seq.Seq Ident
     }
 
 data ClassField = ClassField
@@ -265,7 +269,7 @@ transExpr   (AST.Located l (AST.ExprLval lval)) = do
 transExpr    (AST.Located _ (AST.ExprInt i)) = pure (AST.TyInt, OperandInt i)
 transExpr    (AST.Located l (AST.ExprString str)) = do
     name <- mkName Nothing
-    internString name str
+    internString (mangleString name) str
     value <- emitInstr Nothing (IGetAddr (GetAddr (MemoryGlobal (nameToIdent name)))) l [InstrComment . pPrint $ BS.unpack str]
     pure (AST.TyString, OperandNamed value)
 transExpr    (AST.Located _ AST.ExprTrue) = pure (AST.TyBool, OperandInt 1)
@@ -282,8 +286,8 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
             ret <- emitInstr Nothing (ICall $ Call dest args) l [InstrComment $ "call" <+> pPrint ex]
             pure (info ^. funcInfoDecl . AST.obj . AST.funcRetType, OperandNamed ret)
   where
-     prepareArg :: GIRMonad m => AST.FunArg -> AST.Located AST.Expr -> m Operand
-     prepareArg arg expr = do
+     prepareArg :: GIRMonad m => AST.Located AST.FunArg -> AST.Located AST.Expr -> m Operand
+     prepareArg (AST.Located _ arg) expr = do
         (ty, operand) <- transExpr expr
         checkTypeImplicitConv expr (arg ^. AST.funArgType) ty 
         pure operand
@@ -364,8 +368,7 @@ transExpr ex@(AST.Located l (AST.ExprNew ty)) = do
     checkType ex ty
     case ty of
         AST.TyClass name -> do
-            size <- view (girClasses . at name . singular _Just . classSize)
-            val <- emitInstr Nothing (IIntristic (IntristicAlloc (OperandInt size) (ObjectClass $ coerce name)))
+            val <- emitInstr Nothing (IIntristic (IntristicClone (MemoryGlobal (mangleClassPrototype name))))
                     l [InstrComment $ pPrint ex]
             pure (ty, OperandNamed val)
         _ -> do
@@ -397,9 +400,12 @@ transExprTypeEqual expectedType expr = do
 transLval :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (AST.Type, Memory)
 transLval lval@(AST.Located _ (AST.LvalVar ident)) =
     use (girVariables . at ident) >>= \case
-        Nothing -> do
-            simpleError lval $ "Unbound variable" <+> pPrint ident
-            pure (AST.TyInt, MemoryLocal 0)
+        Nothing -> views girCurrentClass (>>= view (classFields . at ident)) >>= \case
+            Nothing -> do
+                simpleError lval $ "Unbound variable" <+> pPrint ident
+                pure (AST.TyInt, MemoryLocal 0)
+            Just field ->
+                pure (field ^. classFieldType, MemoryField MemoryThis (field ^. classFieldId))
         Just var -> do
             case var ^. varState of
                 VarUndefined -> simpleError lval $ "Variable referenced before definition"
@@ -457,8 +463,9 @@ transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
     simpleError lval "Not a function"
     pure Nothing
 
-transFuncDecl :: (HasCallStack, GIRMonad m) => AST.Located AST.FuncDecl -> m ()
-transFuncDecl locDecl@(AST.Located l decl) = do
+
+transFuncDecl :: (HasCallStack, GIRMonad m) => Maybe AST.Ident -> AST.Located AST.FuncDecl -> m ()
+transFuncDecl mClass locDecl@(AST.Located l decl) = do
     entryBlock <- newBlock "entry"
 
     girVariableCnt .= 0
@@ -472,35 +479,166 @@ transFuncDecl locDecl@(AST.Located l decl) = do
         when (decl ^. AST.funcRetType == AST.TyVoid) $
             setEnd BlockEndReturnVoid
 
-    addFunction (coerce $ decl ^. AST.funcName) entryBlock
+    addFunction (mangle mClass (decl ^. AST.funcName)) entryBlock
   where
     addArg idx arg = do
-        checkType locDecl (arg ^. AST.funArgType)
-        use (girVariables . at (arg ^. AST.funArgName)) >>= \case
+        checkType arg (arg ^. AST.obj . AST.funArgType)
+        use (girVariables . at (arg ^. AST.obj . AST.funArgName)) >>= \case
             Just var | var ^. varState == VarUndefined ->
-                simpleError locDecl $ "Duplicate definition of argument:" <+> pPrint (arg ^. AST.funArgName)
+                simpleError locDecl $ "Duplicate definition of argument:" <+> pPrint (arg ^. AST.obj . AST.funArgName)
             _ -> pure ()
 
-        girVariables . at (arg ^. AST.funArgName) ?= Variable
-            { _varType = arg ^. AST.funArgType
+        girVariables . at (arg ^. AST.obj . AST.funArgName) ?= Variable
+            { _varType = arg ^. AST.obj . AST.funArgType
             , _varLoc = VariableArgument idx
             , _varState = VarUndefined
             , _varDefinedIn = Nothing
             }
 
-    markAsUsable arg = girVariables . at (arg ^. AST.funArgName) . singular _Just . varState .= VarUsable
+    markAsUsable arg = girVariables . at (arg ^. AST.obj . AST.funArgName) . singular _Just . varState .= VarUsable
 
 transClassDecl :: GIRMonad m => AST.Located AST.ClassDecl -> m ()
-transClassDecl = undefined -- TODO
+transClassDecl decl = do
+    info <- view $ girClasses . at (decl ^. AST.obj . AST.className) . singular _Just
+    local (girCurrentClass ?~ info) $ forM_ (decl ^. AST.obj . AST.classMembers) $ \case
+        l@(AST.Located _ (AST.ClassMemberField field)) ->
+            checkType l (field ^. AST.classFieldType)
+        AST.Located l (AST.ClassMemberMethod func) ->
+            transFuncDecl (Just name) (AST.Located l func)
+
+    emitVtable info
+    emitPrototype info
+  where
+    name = decl ^. AST.obj . AST.className
+
+emitVtable :: GIRMonad m => ClassInfo -> m ()
+emitVtable info = internObject (mangleClassVtable name) vtable
+  where
+    name = info ^. classInfoDecl . AST.obj . AST.className
+    vtable = Object [ObjectField (ObjectFieldRef ident) | ident <- toList $ info ^. classObjVtable]
+
+emitPrototype :: GIRMonad m => ClassInfo -> m ()
+emitPrototype info = internObject (mangleClassPrototype name) prototype
+  where
+    name = info ^. classInfoDecl . AST.obj . AST.className
+    prototype = Object $ ObjectField (ObjectFieldRef (mangleClassVtable name)) : fields
+    fields = [ObjectField (defaultValue field) | field <- toList $ info ^. classObjFields]
+
+    defaultValue AST.TyInt = ObjectFieldInt 0
+    defaultValue AST.TyBool = ObjectFieldInt 0
+    defaultValue AST.TyVoid = ObjectFieldInt 0
+    defaultValue (AST.TyArray _) = ObjectFieldNull
+    defaultValue (AST.TyClass _) = ObjectFieldNull
+    defaultValue AST.TyNull = ObjectFieldNull
+    defaultValue AST.TyString = ObjectFieldRef "LATC_emptyString"
 
 transProgram :: (HasCallStack, GIRMonad m) => AST.Program -> m ()
 transProgram (AST.Program prog) = do
-    functionsMap <- view girFunctions
-    functionsMap <- foldM addFunction functionsMap functions
-    local (girFunctions .~ functionsMap) $ forM_ prog $ \case
-        AST.Located l (AST.TLDFunc decl) -> transFuncDecl $ AST.Located l decl
+    functionsMap' <- view girFunctions
+    functionsMap <- foldM addFunction functionsMap' functions
+
+    checkMain functionsMap
+
+    classMap' <- foldM addClass Map.empty classes
+    classMap <- foldM (updateClass classMap' Set.empty) Map.empty classes
+
+    local (girFunctions .~ functionsMap) $ local (girClasses .~ classMap) $ forM_ prog $ \case
+        AST.Located l (AST.TLDFunc decl) -> transFuncDecl Nothing $ AST.Located l decl
         AST.Located l (AST.TLDClass decl) -> transClassDecl $ AST.Located l decl
-    case Map.lookup "main" functionsMap of
+  where
+    functions = [ AST.Located l decl | AST.Located l (AST.TLDFunc decl) <- prog ]
+    classes = [ AST.Located l decl | AST.Located l (AST.TLDClass decl) <- prog ]
+
+    addFunction acc decl
+        | Map.member name acc = do
+            simpleError decl "Function redefinition"
+            pure acc
+        | otherwise = pure $ Map.insert name (FuncInfo decl Nothing) acc
+      where
+        name = decl ^. AST.obj . AST.funcName
+
+    addClass acc decl
+        | Map.member name acc = do
+            simpleError decl "Class redefiniton"
+            pure acc
+        | otherwise = pure $ Map.insert name decl acc
+      where
+        name = decl ^. AST.obj . AST.className
+    
+    updateClass :: GIRMonad m => Map.Map AST.Ident (AST.Located AST.ClassDecl) -> Set.Set AST.Ident
+        -> Map.Map AST.Ident ClassInfo -> AST.Located AST.ClassDecl -> m (Map.Map AST.Ident ClassInfo)
+    updateClass decls stack acc decl
+        | Set.member name stack = do
+            simpleError decl "Cyclic class hierarchy"
+            pure acc
+        | Map.member name acc = pure acc
+        | otherwise = case mbase of
+            Nothing ->
+                addSelf Nothing acc
+            Just baseName | Just baseInfo <- Map.lookup baseName acc ->
+                addSelf (Just baseInfo) acc
+            Just baseName -> case Map.lookup baseName decls of
+                Nothing -> do
+                    simpleError decl $ "Unknown base class" <+> pPrint baseName
+                    addSelf Nothing acc
+                Just baseDecl -> do
+                    acc <- updateClass decls (Set.insert name stack) acc baseDecl
+                    case Map.lookup baseName acc of
+                        Just baseInfo -> addSelf (Just baseInfo) acc
+                        Nothing -> fail "should not happen"
+      where
+        name = decl ^. AST.obj . AST.className
+        mbase = decl ^. AST.obj . AST.classBase
+        fields = [AST.Located l field | AST.Located l (AST.ClassMemberField field) <- decl ^. AST.obj . AST.classMembers]
+        methods = [AST.Located l func | AST.Located l (AST.ClassMemberMethod func) <- decl ^. AST.obj . AST.classMembers]
+
+        addSelf mbaseInfo acc = do
+            info <- computeSelf mbaseInfo acc
+            pure $ Map.insert name info acc
+
+        computeSelf mbaseInfo acc = do
+            let baseFields = maybe Map.empty (view classFields) mbaseInfo
+                baseMethods = maybe Map.empty (view classMethods) mbaseInfo
+                baseObjFields = maybe Seq.empty (view classObjFields) mbaseInfo
+                baseObjVtable = maybe Seq.empty (view classObjVtable) mbaseInfo
+            (fields, objFields) <- foldM (addField baseFields) (Map.empty, baseObjFields) fields
+            (methods, objVtable) <- foldM (addMethod baseMethods) (Map.empty, baseObjVtable) methods
+            pure $ ClassInfo
+                { _classInfoDecl = decl
+                , _classFields = Map.union fields baseFields
+                , _classMethods = Map.union methods baseMethods
+                , _classObjFields = objFields
+                , _classObjVtable = objVtable
+                , _classBase = mbaseInfo
+                }
+
+        addField baseFields (acc, objFields) field
+            | Map.member name acc = do
+                simpleError field "Duplicate field declaration"
+                pure (acc, objFields)
+            | otherwise =
+                pure (Map.insert name (ClassField ty (1 + Seq.length objFields)) acc, objFields Seq.|> ty)
+          where
+            ty = field ^. AST.obj . AST.classFieldType
+            name = field ^. AST.obj . AST.classFieldName
+
+        addMethod baseMethods (acc, objVtable) method
+            | Map.member name acc = do
+                simpleError method "Method redefinition"
+                pure (acc, objVtable)
+            | Just baseMethod <- Map.lookup name baseMethods = do
+                checkOverride (baseMethod ^. funcInfoDecl) method
+                let pos = baseMethod ^. funcInfoVtablePos . singular _Just
+                    objVtable' = Seq.update pos mangled objVtable
+                pure (Map.insert name (FuncInfo method (Just pos)) acc, objVtable')
+            | otherwise =
+                let pos = Seq.length objVtable in
+                pure (Map.insert name (FuncInfo method (Just pos)) acc, objVtable Seq.|> mangled)
+          where
+            name = method ^. AST.obj . AST.funcName
+            mangled = mangle (Just $ decl ^. AST.obj . AST.className) name
+
+    checkMain functionsMap = case Map.lookup "main" functionsMap of
         Just info -> do
             let decl = info ^. funcInfoDecl
             unless (length (decl ^. AST.obj . AST.funcArgs) == 0) $
@@ -513,17 +651,20 @@ transProgram (AST.Program prog) = do
             , _diagType = DiagnosticError
             , _diagNotes = []
             }
-    pure ()
-  where
-    functions = [ AST.Located l decl | AST.Located l (AST.TLDFunc decl) <- prog ]
-    addFunction acc decl
-        | Map.member name acc = do
-            simpleError decl $ "Function redefinition"
-            pure acc
-        | otherwise = pure $ Map.insert name (FuncInfo decl Nothing) acc
-      where
-        name = decl ^. AST.obj . AST.funcName
 
+checkOverride :: GIRMonad m => AST.Located AST.FuncDecl -> AST.Located AST.FuncDecl -> m ()
+checkOverride base derived = do
+    unless (length baseArgs == length derivedArgs) $
+        simpleError derived "Number of arguments does not match base class"
+    zipWithM_ checkArg baseArgs derivedArgs
+    checkTypeImplicitConv derived (base ^. AST.obj . AST.funcRetType) (derived ^. AST.obj . AST.funcRetType)
+  where
+    baseArgs = base ^. AST.obj . AST.funcArgs
+    derivedArgs = derived ^. AST.obj . AST.funcArgs
+
+    checkArg baseArg derivedArg =
+        checkTypeImplicitConv derivedArg (derivedArg ^. AST.obj . AST.funArgType) (baseArg ^. AST.obj . AST.funArgType)
+    
 memoryOfVariable :: VariableLoc -> Memory
 memoryOfVariable (VariableLocal idx) = MemoryLocal idx
 memoryOfVariable (VariableArgument idx) = MemoryArgument idx
@@ -565,16 +706,25 @@ checkTypeEqual ctx expected got = unless (expected == got) . simpleError ctx $ h
     ]
 
 checkTypeImplicitConv :: (GIRMonad m, Reportible r) => r -> AST.Type -> AST.Type -> m ()
-checkTypeImplicitConv ctx expected got = unless (convertible expected got) . simpleError ctx $ hsep
-    [ "Type mismatch: expected"
-    , pPrint expected
-    , "but got:"
-    , pPrint got
-    ]
+checkTypeImplicitConv ctx expected got = case (expected, got) of
+    (AST.TyClass _, AST.TyNull) -> pure ()
+    (AST.TyClass c, AST.TyClass c') -> do
+        info <- view (girClasses . at c)
+        info' <- view (girClasses . at c')
+        case (info, info') of
+            (Just info, Just info') ->  unless (name info `elem` map name (classBases info')) err
+            _ -> simpleError ctx "Type error"
+    (t, t') | t == t' -> pure ()
+    _ -> err
   where
-    -- TODO inheritance
-    convertible (AST.TyClass _) AST.TyNull = True
-    convertible t t' = t == t'
+    err = simpleError ctx $ hsep
+        [ "Type mismatch: cannot convert"
+        , pPrint got
+        , "to:"
+        , pPrint expected
+        ]
+
+    name info = info ^. classInfoDecl . AST.obj . AST.className
     
 checkTypesComparable :: (GIRMonad m, Reportible r) => r -> AST.Type -> AST.Type -> m ()
 checkTypesComparable ctx expected got = unless (comparable expected got) . simpleError ctx $ hsep
@@ -587,6 +737,11 @@ checkTypesComparable ctx expected got = unless (comparable expected got) . simpl
     comparable AST.TyNull (AST.TyClass _) = True
     comparable (AST.TyClass _) AST.TyNull = True
     comparable t t' = t == t'
+
+classBases :: ClassInfo -> [ClassInfo]
+classBases cls = case cls ^. classBase of
+    Nothing -> [cls]
+    Just base -> cls : classBases base
 
 emitInstr :: GIRMonad m => Maybe Ident -> InstrPayload -> AST.LocRange -> [InstrMetadata] -> m Name
 emitInstr humanName payload loc meta = do
@@ -642,7 +797,27 @@ generateIR program = do
     nowhere = AST.LocRange (AST.Location 0 0) (AST.Location 0 0)
     builtin name retTy argTys = (name, flip FuncInfo Nothing $ AST.Located nowhere AST.FuncDecl
         { AST._funcName = name
-        , AST._funcArgs = [ AST.FunArg ty "" | ty <- argTys ]
+        , AST._funcArgs = [ AST.Located nowhere $ AST.FunArg ty "" | ty <- argTys ]
         , AST._funcRetType = retTy
         , AST._funcBody = AST.Located nowhere AST.StmtNone
         })
+
+mangle :: Maybe AST.Ident -> AST.Ident -> Ident
+mangle Nothing funName = coerce $ BS.concat ["_function", manglePart funName]
+mangle (Just className) funName = coerce $ BS.concat
+    [ "_method"
+    , manglePart className
+    , manglePart funName
+    ]
+
+manglePart :: AST.Ident -> BS.ByteString
+manglePart part = BS.concat ["_", BS.pack . show . BS.length $ coerce part, "_", coerce part]
+
+mangleClassPrototype :: AST.Ident -> Ident
+mangleClassPrototype name = coerce $ BS.concat ["_proto", manglePart name]
+
+mangleClassVtable :: AST.Ident -> Ident
+mangleClassVtable name = coerce $ BS.concat ["_vtable", manglePart name]
+
+mangleString :: Name -> Ident
+mangleString name = coerce $ BS.concat ["_string", BS.pack . show . getUniqueId $ name ^. nameUnique]

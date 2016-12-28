@@ -22,6 +22,19 @@ newtype UniqueId = UniqueId { getUniqueId :: Int }
 newtype Ident = Ident { getIdent :: BS.ByteString }
     deriving (Eq, Ord, Show, IsString)
 
+data Object = Object
+    { _objectFields :: [ObjectField]
+    }
+
+data ObjectField = ObjectField
+    { _objectFieldData :: !ObjectFieldData
+    }
+
+data ObjectFieldData
+    = ObjectFieldInt !Int
+    | ObjectFieldNull
+    | ObjectFieldRef !Ident
+
 data Operand
     = OperandNamed !Name
     | OperandSize !Size
@@ -158,6 +171,7 @@ data UnOperator
 
 data Intristic
     = IntristicAlloc !Operand !ObjectType
+    | IntristicClone !Memory
     | IntristicConcat !Operand !Operand
     deriving Show
 
@@ -186,6 +200,8 @@ makeLenses ''Call
 makeLenses ''Instruction
 makeLenses ''Block
 makeLenses ''IncDec
+makeLenses ''Object
+makeLenses ''ObjectField
 
 instance HasName Block where
     name = blockName
@@ -287,6 +303,7 @@ instance Pretty CallDest where
 
 instance Pretty Intristic where
     pPrint (IntristicAlloc size ty) = "alloc" <+> pPrint size <+> "bytes of" <+> pPrint ty
+    pPrint (IntristicClone mem) = "clone" <+> pPrint mem
     pPrint (IntristicConcat lhs rhs) = "concat" <+> pPrint lhs <> comma <+> pPrint rhs
 
 instance Pretty ObjectType where
@@ -356,6 +373,17 @@ instance Pretty PhiNode where
 
 instance Pretty PhiBranch where
     pPrint (PhiBranch from value) = pPrint value <+> "if from" <+> pPrint from
+
+instance Pretty Object where
+    pPrint (Object fields) = vcat (map pPrint fields)
+
+instance Pretty ObjectField where
+    pPrint field = pPrint $ field ^. objectFieldData
+
+instance Pretty ObjectFieldData where
+    pPrint (ObjectFieldInt i) = int i
+    pPrint ObjectFieldNull = "null"
+    pPrint (ObjectFieldRef ref) = "ref to" <+> pPrint ref
 
 class PrettyIO a where
     pPrintIO :: MonadIO m => a -> m Doc

@@ -21,7 +21,8 @@ import Text.PrettyPrint.HughesPJClass
 data MiddleEndState = MiddleEndState
     { _meNextUnique :: !Int
     , _meFunctions :: Map.Map Ident FunctionDescriptor
-    , _meStrings :: Map.Map Name BS.ByteString
+    , _meStrings :: Map.Map Ident BS.ByteString
+    , _meObjects :: Map.Map Ident Object
     , _meDiagnostics :: Seq.Seq Diagnostic
     }
 
@@ -56,8 +57,11 @@ report diagnostic = meDiagnostics %= (|> diagnostic)
 addFunction :: (MonadState s m, HasMiddleEndState s) => Ident -> Block -> m ()
 addFunction ident entryBlock = meFunctions . at ident ?= FunctionDescriptor entryBlock
 
-internString :: (MonadState s m, HasMiddleEndState s) => Name -> BS.ByteString -> m ()
+internString :: (MonadState s m, HasMiddleEndState s) => Ident -> BS.ByteString -> m ()
 internString name str = meStrings . at name ?= str
+
+internObject :: (MonadState s m, HasMiddleEndState s) => Ident -> Object -> m ()
+internObject name obj = meObjects . at name ?= obj
 
 type Reportible r = (AST.HasLocRange r, Pretty r)
 
@@ -69,6 +73,7 @@ run act = views meDiagnostics toList <$> execStateT act MiddleEndState
     { _meNextUnique = 0
     , _meFunctions = Map.empty
     , _meDiagnostics = Seq.empty
+    , _meObjects = Map.empty
     , _meStrings = Map.empty
     }
 
@@ -93,11 +98,13 @@ instance PrettyIO MiddleEndState where
        funcs <- ifoldrM goFunc empty (state ^. meFunctions)
        let strings = vcat ["string" <+> pPrint name <+> "=" <+> pPrint (BS.unpack str)
                           | (name, str) <- itoList $ state ^. meStrings]
-       pure $ funcs $+$ strings
+       let objects = vcat [("object" <+> pPrint name) $+$ nest 4 (pPrint obj)
+                          | (name, obj) <- itoList $ state ^. meObjects]
+       pure $ funcs $+$ strings $+$ objects
       where
         goFunc name func acc = do
             body <- pPrintIO func
-            pure $ hang ("function" <+> pPrint name) 4 body $+$ acc
+            pure $ ("function" <+> pPrint name) $+$ nest 4 body $+$ acc
 
 instance Pretty Diagnostic where
     pPrint diag = hang main 4 (vcat . map pPrint $ diag ^. diagNotes)

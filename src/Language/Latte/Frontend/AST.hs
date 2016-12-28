@@ -47,7 +47,7 @@ newtype Ident = Ident { getIdent :: BS.ByteString }
 
 data FuncDecl = FuncDecl
     { _funcName :: !Ident
-    , _funcArgs :: [FunArg]
+    , _funcArgs :: [Located FunArg]
     , _funcRetType :: !Type
     , _funcBody :: !(Located Stmt)
     }
