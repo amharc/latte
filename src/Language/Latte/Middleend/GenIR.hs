@@ -456,7 +456,8 @@ transFunCall (AST.Located l (AST.LvalVar name)) = view (girFunctions . at name) 
     Just info -> case info ^. funcInfoVtablePos of
         Nothing -> pure $ Just (MemoryGlobal $ mangle Nothing name, info)
         Just offset -> do
-            addr <- virtualFuncAddr l (MemoryArgument 0) offset
+            this <- OperandNamed <$> emitInstr (Just "this") (Load (MemoryArgument 0) SizePtr) l []
+            addr <- virtualFuncAddr l this offset
             pure $ Just (addr, info)
 transFunCall lval@(AST.Located l (AST.LvalField objExpr name)) = do
     (objTy, objOperand) <- transExpr objExpr
@@ -467,7 +468,7 @@ transFunCall lval@(AST.Located l (AST.LvalField objExpr name)) = do
                     simpleError lval $ pPrint className <+> "has no method" <+> pPrint name
                     pure Nothing
                 Just info -> do
-                    addr <- virtualFuncAddr l (MemoryPointer objOperand) (info ^. funcInfoVtablePos . singular _Just)
+                    addr <- virtualFuncAddr l objOperand (info ^. funcInfoVtablePos . singular _Just)
                     pure $ Just (addr, info)
         _ -> do
             simpleError lval $ "not a class"
@@ -476,10 +477,8 @@ transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
     simpleError lval "Not a function"
     pure Nothing
 
-virtualFuncAddr :: GIRMonad m => AST.LocRange -> Memory -> Int -> m Memory
-virtualFuncAddr l objMem idx = do
-    obj <- OperandNamed <$> emitInstr (Just "object") (Load objMem SizePtr)
-        l [InstrComment "load object pointer"]
+virtualFuncAddr :: GIRMonad m => AST.LocRange -> Operand -> Int -> m Memory
+virtualFuncAddr l obj idx = do
     vtablePtr <- OperandNamed <$> emitInstr (Just "vtable") (Load (MemoryOffset obj (OperandInt 0) SizePtr) SizePtr)
         l [InstrComment "load vtable ptr", InstrInvariant]
     pure $ MemoryOffset vtablePtr (OperandInt idx) SizePtr

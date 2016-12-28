@@ -19,9 +19,7 @@ import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
 
 opt :: (MonadIO m, MonadState s m, HasMiddleEndState s) => m ()
-opt = do
-    funcs <- use meFunctions
-    forM_ funcs runFunction
+opt = use meFunctions >>= mapM_ runFunction
 
 runFunction :: (MonadIO m, MonadState s m, HasMiddleEndState s) => FunctionDescriptor -> m ()
 runFunction desc = do

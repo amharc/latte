@@ -9,6 +9,7 @@ import qualified Language.Latte.Middleend.GenIR as M
 import qualified Language.Latte.Middleend.Monad as M
 import qualified Language.Latte.Middleend.MemToReg as MemToReg
 import qualified Language.Latte.Middleend.SimplifyPhi as SimplifyPhi
+import qualified Language.Latte.Middleend.Propagate as Propagate
 import Text.Parsec.ByteString
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -30,6 +31,18 @@ middle program = do
 
         liftIO $ putStrLn "\n\nSimplifyPhi\n\n"
         SimplifyPhi.opt
+        M.debugState >>= liftIO . putStrLn . render 
+
+        liftIO $ putStrLn "\n\nPropagate\n\n"
+        Propagate.opt
+        M.debugState >>= liftIO . putStrLn . render 
+
+        liftIO $ putStrLn "\n\nSimplifyPhi\n\n"
+        SimplifyPhi.opt
+        M.debugState >>= liftIO . putStrLn . render 
+
+        liftIO $ putStrLn "\n\nPropagate\n\n"
+        Propagate.opt
         M.debugState >>= liftIO . putStrLn . render 
 
     forM_ diags $ \diag ->

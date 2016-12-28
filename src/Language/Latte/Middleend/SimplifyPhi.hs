@@ -13,9 +13,7 @@ import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
 
 opt :: (MonadIO m, MonadState s m, HasMiddleEndState s) => m ()
-opt = do
-    funcs <- use meFunctions
-    forM_ funcs runFunction
+opt = use meFunctions >>= mapM_ runFunction
 
 runFunction :: (MonadIO m) => FunctionDescriptor -> m ()
 runFunction desc = reachableBlocks (desc ^. funcEntryBlock) >>= mapM_ runBlock
@@ -31,7 +29,7 @@ updatePhis block = foldrM go Seq.empty
     go node acc = (filterM incoming $ node ^. phiBranches) >>= \case
         [] -> push (node ^. name) OperandUndef >> pure acc
         [branch] -> push (node ^. name) (branch ^. phiValue) >> pure acc
-        branches -> case Set.toList $ Set.fromList [branch ^. phiValue | branch <- branches] of
+        branches -> case Set.toList $ Set.fromList [branch ^. phiValue | branch <- branches, branch ^. phiValue /= OperandNamed (node ^. name)] of
             [target] -> push (node ^. name) target >> pure acc
             _ -> pure ((node & phiBranches .~ branches) Seq.<| acc)
 
