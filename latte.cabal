@@ -23,6 +23,7 @@ library
                        Language.Latte.Middleend.MemToReg
                        Language.Latte.Middleend.SimplifyPhi
                        Language.Latte.Middleend.Propagate
+                       Language.Latte.Middleend.Fixed
   build-depends:       base >= 4.9 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0

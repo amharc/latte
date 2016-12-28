@@ -57,7 +57,7 @@ data Memory
     | MemoryOffset !Operand !Operand !Size
     | MemoryGlobal !Ident
     | MemoryUndef
-    deriving Show
+    deriving (Eq, Show)
 
 pattern MemoryPointer :: Operand -> Memory
 pattern MemoryPointer ptr = MemoryOffset ptr (OperandInt 0) SizePtr
@@ -75,20 +75,20 @@ data InstrPayload
     | IIntristic !Intristic
     | IIncDec !IncDec
     | IConst !Operand
-    deriving Show
+    deriving (Eq, Show)
 
 data Instruction = Instruction
     { _instrResult :: !Name
     , _instrPayload :: !InstrPayload
     , _instrMetadata :: [InstrMetadata]
     }
-    deriving Show
+    deriving (Eq, Show)
 
 data InstrMetadata
     = InstrComment !Doc
     | InstrInvariant
     | InstrLocation !Frontend.LocRange
-    deriving Show
+    deriving (Eq, Show)
 
 data Block = Block
     { _blockName :: !Name
@@ -102,11 +102,13 @@ data PhiNode = PhiNode
     { _phiName :: !Name
     , _phiBranches :: [PhiBranch]
     }
+    deriving Eq
 
 data PhiBranch = PhiBranch
     { _phiFrom :: !Block
     , _phiValue :: !Operand
     }
+    deriving Eq
 
 data BlockEnd
     = BlockEndBranch !Block
@@ -114,12 +116,13 @@ data BlockEnd
     | BlockEndReturn !Operand
     | BlockEndReturnVoid
     | BlockEndNone
+    deriving Eq
 
 data Load = SLoad
     { _loadFrom :: !Memory
     , _loadSize :: !Size
     }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern Load :: Memory -> Size -> InstrPayload
 pattern Load from size = ILoad (SLoad from size)
@@ -129,7 +132,7 @@ data Store = SStore
     , _storeSize :: !Size
     , _storeValue :: !Operand
     }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern Store :: Memory -> Size -> Operand -> InstrPayload
 pattern Store to size value = IStore (SStore to size value)
@@ -139,7 +142,7 @@ data BinOp = SBinOp
     , _binOpOp ::  !BinOperator
     , _binOpRhs :: !Operand
     }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern BinOp :: Operand -> BinOperator -> Operand -> InstrPayload
 pattern BinOp lhs op rhs = IBinOp (SBinOp lhs op rhs)
@@ -148,13 +151,13 @@ data UnOp = SUnOp
     { _unOpOp :: !UnOperator
     , _unOpArg :: !Operand
     }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern UnOp :: UnOperator -> Operand -> InstrPayload
 pattern UnOp op arg = IUnOp (SUnOp op arg)
 
 newtype GetAddr = SGetAddr { _getAddrMem :: Memory }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern GetAddr :: Memory -> InstrPayload
 pattern GetAddr mem = IGetAddr (SGetAddr mem)
@@ -163,7 +166,7 @@ data Call = SCall
     { _callDest :: !Memory
     , _callArgs :: [Operand]
     }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern Call :: Memory -> [Operand] -> InstrPayload
 pattern Call dest args = ICall (SCall dest args)
@@ -182,18 +185,18 @@ data BinOperator
     | BinOpNotEqual
     | BinOpAnd
     | BinOpOr
-    deriving Show
+    deriving (Eq, Show)
 
 data UnOperator
     = UnOpNeg
     | UnOpNot
-    deriving Show
+    deriving (Eq, Show)
 
 data Intristic
     = IntristicAlloc !Operand !ObjectType
     | IntristicClone !Memory
     | IntristicConcat !Operand !Operand
-    deriving Show
+    deriving (Eq, Show)
 
 data ObjectType
     = ObjectInt
@@ -203,12 +206,12 @@ data ObjectType
     | ObjectPrimArray
     | ObjectArray
     | ObjectClass !Ident
-    deriving Show
+    deriving (Eq, Show)
 
 data IncDec
     = SInc { _incDecMemory :: !Memory, _incDecSize :: !Size }
     | SDec { _incDecMemory :: !Memory, _incDecSize :: !Size }
-    deriving Show
+    deriving (Eq, Show)
 
 pattern Inc :: Memory -> Size -> InstrPayload
 pattern Inc arg size = IIncDec (SInc arg size)
@@ -445,7 +448,6 @@ reachableBlocks start = go (Seq.singleton start) Set.empty
     add (queue, set) block
         | Set.member (block ^. blockName) set = (queue, set)
         | otherwise = (queue |> block, Set.insert (block ^. blockName) set)
-
 
 nameToIdent :: Name -> Ident
 nameToIdent name = Ident . BS.pack $ '.' : show (views nameUnique getUniqueId name)
