@@ -167,11 +167,11 @@ transStmt st@(AST.Located l stmt@(AST.StmtReturn (Just expr))) = do
 transStmt st@(AST.Located l (AST.StmtInc lval)) = do
     (ty, memory) <- transLval lval
     checkTypeEqual st AST.TyInt ty
-    void $ emitInstr Nothing (IIncDec $ Inc memory (sizeOf ty)) l [InstrComment $ "increment of " <+> pPrint lval]
+    void $ emitInstr Nothing (Inc memory (sizeOf ty)) l [InstrComment $ "increment of " <+> pPrint lval]
 transStmt st@(AST.Located l (AST.StmtDec lval)) = do
     (ty, memory) <- transLval lval
     checkTypeEqual st AST.TyInt ty
-    void $ emitInstr Nothing (IIncDec $ Dec memory (sizeOf ty)) l [InstrComment $ "decrement of " <+> pPrint lval]
+    void $ emitInstr Nothing (Dec memory (sizeOf ty)) l [InstrComment $ "decrement of " <+> pPrint lval]
 transStmt st@(AST.Located l (AST.StmtIf cond ifTrue mifFalse)) = do
     operand <- transExprTypeEqual AST.TyBool cond
 
@@ -279,7 +279,7 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
     transFunCall funLval >>= \case
         Nothing -> do
             simpleError ex $ "Unresolved function, unable to call"
-            pure (AST.TyInt, OperandInt 0) -- TODO
+            pure (AST.TyInt, OperandUndef) -- TODO
         Just (dest, info) -> do
             checkCallArgumentsLength ex (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
             args <- zipWithM prepareArg (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
@@ -357,7 +357,7 @@ transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
             (retTy,) <$> emit op
         _ -> do
             simpleError ex "Invalid binary operator application"
-            pure (AST.TyInt, OperandInt 0)
+            pure (AST.TyNull, OperandUndef)
   where
     intOp AST.BinOpPlus = Just (AST.TyInt, BinOpPlus)
     intOp AST.BinOpMinus = Just (AST.TyInt, BinOpMinus)
@@ -378,7 +378,7 @@ transExpr ex@(AST.Located l (AST.ExprNew ty)) = do
             pure (ty, OperandNamed val)
         _ -> do
             simpleError ex $ "Not a class type:" <+> pPrint ty
-            pure (AST.TyNull, OperandInt 0)
+            pure (AST.TyNull, OperandUndef)
 transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
     checkType ex ty
     lenOperand <- transExprTypeEqual AST.TyInt lenExpr
@@ -408,9 +408,9 @@ transLval lval@(AST.Located l (AST.LvalVar ident)) =
         Nothing -> views girCurrentClass (>>= view (classFields . at ident)) >>= \case
             Nothing -> do
                 simpleError lval $ "Unbound variable" <+> pPrint ident
-                pure (AST.TyInt, MemoryLocal 0)
+                pure (AST.TyInt, MemoryUndef)
             Just field -> do
-                this <- OperandNamed <$> emitInstr Nothing (GetAddr $ MemoryArgument 0) l []
+                this <- OperandNamed <$> emitInstr Nothing (Load (MemoryArgument 0) SizePtr) l []
                 pure (field ^. classFieldType, MemoryOffset this (OperandInt $ field ^. classFieldId) SizePtr)
         Just var -> do
             case var ^. varState of
@@ -427,7 +427,7 @@ transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
             pure (ty, MemoryOffset arrData operandIdx (sizeOf ty))
         ty -> do
             simpleError lval $ "Not an array: " <+> pPrint ty
-            pure (AST.TyInt, MemoryLocal 0)
+            pure (AST.TyInt, MemoryUndef)
 transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
     (tyObj, operandObj) <- transExpr objExpr
     case tyObj of
@@ -481,7 +481,7 @@ virtualFuncAddr l objMem idx = do
     obj <- OperandNamed <$> emitInstr (Just "object") (Load objMem SizePtr)
         l [InstrComment "load object pointer"]
     vtablePtr <- OperandNamed <$> emitInstr (Just "vtable") (Load (MemoryOffset obj (OperandInt 0) SizePtr) SizePtr)
-        l [InstrComment "load vtable ptr"]
+        l [InstrComment "load vtable ptr", InstrInvariant]
     pure $ MemoryOffset vtablePtr (OperandInt idx) SizePtr
 
 transFuncDecl :: (HasCallStack, GIRMonad m) => Maybe AST.Ident -> AST.Located AST.FuncDecl -> m ()
@@ -493,7 +493,7 @@ transFuncDecl mClass locDecl@(AST.Located l decl) = do
     girCurrentBlock .= entryBlock
 
     local (girCurrentFunction ?~ decl) $ do
-        zipWithM_ addArg [0..] (decl ^. AST.funcArgs)
+        zipWithM_ addArg [argStart..] (decl ^. AST.funcArgs)
         forM_ (decl ^. AST.funcArgs) markAsUsable
         transStmt $ decl ^. AST.funcBody
         when (decl ^. AST.funcRetType == AST.TyVoid) $
@@ -514,6 +514,10 @@ transFuncDecl mClass locDecl@(AST.Located l decl) = do
             , _varState = VarUndefined
             , _varDefinedIn = Nothing
             }
+
+    argStart = case mClass of
+        Just _ -> 1
+        Nothing -> 0
 
     markAsUsable arg = girVariables . at (arg ^. AST.obj . AST.funArgName) . singular _Just . varState .= VarUsable
 
@@ -767,14 +771,14 @@ emitInstr :: GIRMonad m => Maybe Ident -> InstrPayload -> AST.LocRange -> [Instr
 emitInstr humanName payload loc meta = do
     result <- mkName humanName
     ioref <- use $ girCurrentBlock . blockBody
-    liftIO $ modifyIORef' ioref (Seq.|> Instruction result payload (Just loc) meta)
+    liftIO $ modifyIORef' ioref (Seq.|> Instruction result payload (InstrLocation loc : meta))
     pure result
 
 emitPhi :: GIRMonad m => Maybe Ident -> [PhiBranch] -> m Name
 emitPhi humanName branches = do
     result <- mkName humanName
     ioref <- use $ girCurrentBlock . blockPhi
-    liftIO $ modifyIORef' ioref (PhiNode result branches :)
+    liftIO $ modifyIORef' ioref (PhiNode result branches Seq.<|)
     pure result
 
 setEnd :: GIRMonad m => BlockEnd -> m ()

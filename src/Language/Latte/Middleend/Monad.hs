@@ -13,7 +13,6 @@ import Control.Monad.State
 import qualified Data.ByteString.Char8 as BS
 import Data.Foldable
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -78,21 +77,12 @@ run act = views meDiagnostics toList <$> execStateT act MiddleEndState
     }
 
 instance PrettyIO FunctionDescriptor where
-    pPrintIO desc = go (Seq.singleton $ desc ^. funcEntryBlock) Set.empty
+    pPrintIO desc = do
+        blocks <- reachableBlocks $ desc ^. funcEntryBlock
+        foldrM go empty blocks
       where
-        go :: MonadIO m => Seq.Seq Block -> Set.Set Name -> m Doc
-        go queue visited = case Seq.viewl queue of
-            Seq.EmptyL -> pure empty
-            block Seq.:< blocks -> do
-                current <- pPrintIO block
-                succs <- successors block
-                let (queue, set) = foldl add (blocks, visited) succs
-                (current $+$) <$> go queue set
-
-        add (queue, set) block
-            | Set.member (block ^. blockName) set = (queue, set)
-            | otherwise = (queue |> block, Set.insert (block ^. blockName) set)
-
+        go block doc = ($+$ doc) <$> pPrintIO block
+    
 instance PrettyIO MiddleEndState where
     pPrintIO state = do
        funcs <- ifoldrM goFunc empty (state ^. meFunctions)
@@ -119,3 +109,4 @@ instance Pretty DiagnosticType where
     pPrint DiagnosticError = "error"
     pPrint DiagnosticWarning = "warning"
     pPrint DiagnosticNote = "note"
+

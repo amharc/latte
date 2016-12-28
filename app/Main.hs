@@ -8,6 +8,7 @@ import qualified Language.Latte.Frontend.Parser as P
 import qualified Language.Latte.Middleend.GenIR as M
 import qualified Language.Latte.Middleend.IR as M
 import qualified Language.Latte.Middleend.Monad as M
+import qualified Language.Latte.Middleend.MemToReg as MemToReg
 import Text.Parsec.ByteString
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -21,6 +22,11 @@ middle program = do
 
     diags <- M.run $ do
         M.generateIR program
+        M.debugState >>= liftIO . putStrLn . render 
+
+        liftIO $ putStrLn "MemToReg"
+
+        MemToReg.opt
         M.debugState >>= liftIO . putStrLn . render 
 
     forM_ diags $ \diag ->

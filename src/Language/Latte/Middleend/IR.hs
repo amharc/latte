@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -11,6 +12,7 @@ import Control.Monad.IO.Class
 import qualified Data.ByteString.Char8 as BS
 import Data.Foldable
 import Data.IORef
+import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
 import Data.String
 import qualified Language.Latte.Frontend.AST as Frontend
@@ -40,6 +42,7 @@ data Operand
     = OperandNamed !Name
     | OperandSize !Size
     | OperandInt !Int
+    | OperandUndef
     deriving Show
 
 data Name = Name
@@ -53,13 +56,14 @@ data Memory
     | MemoryArgument {-# UNPACK #-} !Int
     | MemoryOffset !Operand !Operand !Size
     | MemoryGlobal !Ident
+    | MemoryUndef
     deriving Show
 
 pattern MemoryPointer :: Operand -> Memory
 pattern MemoryPointer ptr = MemoryOffset ptr (OperandInt 0) SizePtr
 
-data Size = Size8 | Size32 | Size64 | Size0 | SizePtr
-    deriving Show
+data Size = Size0 | Size8 | Size32 | Size64 | SizePtr
+    deriving (Eq, Ord, Show)
 
 data InstrPayload
     = ILoad !Load
@@ -70,23 +74,25 @@ data InstrPayload
     | ICall !Call
     | IIntristic !Intristic
     | IIncDec !IncDec
+    | IConst !Operand
     deriving Show
 
 data Instruction = Instruction
     { _instrResult :: !Name
     , _instrPayload :: !InstrPayload
-    , _instrLocation :: !(Maybe Frontend.LocRange)
     , _instrMetadata :: [InstrMetadata]
     }
     deriving Show
 
 data InstrMetadata
-    = InstrComment Doc
+    = InstrComment !Doc
+    | InstrInvariant
+    | InstrLocation !Frontend.LocRange
     deriving Show
 
 data Block = Block
     { _blockName :: !Name
-    , _blockPhi :: {-# UNPACK #-} !(IORef [PhiNode])
+    , _blockPhi :: {-# UNPACK #-} !(IORef (Seq.Seq PhiNode))
     , _blockBody :: {-# UNPACK #-} !(IORef (Seq.Seq Instruction))
     , _blockEnd :: {-# UNPACK #-} !(IORef BlockEnd)
     }
@@ -200,9 +206,15 @@ data ObjectType
     deriving Show
 
 data IncDec
-    = Inc { _incDecMemory :: !Memory, _incDecSize :: !Size }
-    | Dec { _incDecMemory :: !Memory, _incDecSize :: !Size }
+    = SInc { _incDecMemory :: !Memory, _incDecSize :: !Size }
+    | SDec { _incDecMemory :: !Memory, _incDecSize :: !Size }
     deriving Show
+
+pattern Inc :: Memory -> Size -> InstrPayload
+pattern Inc arg size = IIncDec (SInc arg size)
+
+pattern Dec :: Memory -> Size -> InstrPayload
+pattern Dec arg size = IIncDec (SDec arg size)
 
 makeClassy ''Name
 makeLenses ''Load
@@ -211,6 +223,7 @@ makeLenses ''BinOp
 makeLenses ''UnOp
 makeLenses ''GetAddr
 makeLenses ''Call
+makePrisms ''InstrPayload
 makeLenses ''Instruction
 makeLenses ''Block
 makeLenses ''IncDec
@@ -233,6 +246,7 @@ instance Pretty Operand where
     pPrint (OperandNamed n) = pPrint n
     pPrint (OperandInt i) = int i
     pPrint (OperandSize sz) = "sizeof" <+> pPrint sz
+    pPrint OperandUndef = "undef"
 
 instance Pretty Name where
     pPrint (Name i Nothing) = char '%' <> pPrint i
@@ -243,6 +257,7 @@ instance Pretty Memory where
     pPrint (MemoryArgument i) = "argument" <+> int i
     pPrint (MemoryOffset mem i sz) = pPrint mem <+> "+" <+> pPrint i <+> "*" <+> pPrint sz
     pPrint (MemoryGlobal i) = "global" <+> pPrint i
+    pPrint MemoryUndef = "undef"
 
 instance Pretty Size where
     pPrint Size8 = "8 bits"
@@ -331,20 +346,21 @@ instance Pretty InstrPayload where
     pPrint (ICall call) = pPrint call
     pPrint (IIntristic intristic) = pPrint intristic
     pPrint (IIncDec incdec) = pPrint incdec
+    pPrint (IConst op) = pPrint op
 
 instance Pretty Instruction where
     pPrint instr = hsep
         [ pPrint (instr ^. instrResult)
         , "="
         , pPrint (instr ^. instrPayload)
-        , ";"
-        , maybe empty pPrint (instr ^. instrLocation)
         , "#"
         , hsep . punctuate semi $ map pPrint (instr ^. instrMetadata)
         ]
 
 instance Pretty InstrMetadata where
     pPrint (InstrComment comment) = comment
+    pPrint InstrInvariant = "!invariant"
+    pPrint (InstrLocation loc) = "at" <+> pPrint loc
 
 instance Pretty Block where
     pPrint block = "block" <+> pPrint (block ^. blockName)
@@ -364,12 +380,12 @@ instance Pretty BlockEnd where
     pPrint BlockEndNone = "must be unreachable"
 
 instance Pretty IncDec where
-    pPrint (Inc mem sz) = sep
+    pPrint (SInc mem sz) = sep
         [ "increment"
         , pPrint sz
         , "at"
         , pPrint mem]
-    pPrint (Dec mem sz) = sep
+    pPrint (SDec mem sz) = sep
         [ "decrement"
         , pPrint sz
         , "at"
@@ -397,7 +413,7 @@ class PrettyIO a where
 
 instance PrettyIO Block where
     pPrintIO blk = do
-        phi <- fmap (vcat . map pPrint) . liftIO . readIORef $ blk ^. blockPhi
+        phi <- fmap (vcat . map pPrint . toList) . liftIO . readIORef $ blk ^. blockPhi
         body <- fmap (vcat . map pPrint . toList) . liftIO . readIORef $ blk ^. blockBody
         end <- fmap pPrint . liftIO . readIORef $ blk ^. blockEnd
         pure $ pPrint (blk ^. name) $+$ nest 4 (phi $+$ body $+$ end)
@@ -409,6 +425,22 @@ successors block = liftIO $ readIORef (block ^. blockEnd) >>= \case
     BlockEndBranchCond _ ifTrue ifFalse -> pure [ifTrue, ifFalse]
     BlockEndReturn _ -> pure []
     BlockEndReturnVoid -> pure []
+
+reachableBlocks :: MonadIO m => Block -> m [Block]
+reachableBlocks start = go (Seq.singleton start) Set.empty
+  where
+    go :: MonadIO m => Seq.Seq Block -> Set.Set Name -> m [Block]
+    go queue visited = case Seq.viewl queue of
+        Seq.EmptyL -> pure []
+        block Seq.:< blocks -> do
+            succs <- successors block
+            let (queue, set) = foldl add (blocks, visited) succs
+            (block:) <$> go queue set
+
+    add (queue, set) block
+        | Set.member (block ^. blockName) set = (queue, set)
+        | otherwise = (queue |> block, Set.insert (block ^. blockName) set)
+
 
 nameToIdent :: Name -> Ident
 nameToIdent name = Ident . BS.pack $ '.' : show (views nameUnique getUniqueId name)
