@@ -156,7 +156,7 @@ transStmt st@(AST.Located l stmt@(AST.StmtReturn Nothing)) =
 transStmt st@(AST.Located l stmt@(AST.StmtReturn (Just expr))) = do
     retTy <- view (girCurrentFunction . singular _Just . AST.funcRetType) 
     (ty, operand) <- transExpr expr
-    checkTypeImplicitConv l retTy retTy
+    checkTypeImplicitConv l retTy ty
     setEnd $ BlockEndReturn operand
 transStmt st@(AST.Located l (AST.StmtInc lval)) = do
     (ty, memory) <- transLval lval
