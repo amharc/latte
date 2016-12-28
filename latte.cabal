@@ -21,6 +21,7 @@ library
                        Language.Latte.Middleend.GenIR
                        Language.Latte.Middleend.Monad
                        Language.Latte.Middleend.MemToReg
+                       Language.Latte.Middleend.SimplifyPhi
   build-depends:       base >= 4.9 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0

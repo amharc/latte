@@ -43,7 +43,7 @@ data Operand
     | OperandSize !Size
     | OperandInt !Int
     | OperandUndef
-    deriving Show
+    deriving (Eq, Ord, Show)
 
 data Name = Name
     { _nameUnique :: {-# UNPACK #-} !UniqueId
@@ -229,12 +229,17 @@ makeLenses ''Block
 makeLenses ''IncDec
 makeLenses ''Object
 makeLenses ''ObjectField
+makeLenses ''PhiNode
+makeLenses ''PhiBranch
 
 instance HasName Block where
     name = blockName
 
 instance HasName Instruction where
     name = instrResult
+
+instance HasName PhiNode where
+    name = phiName
 
 instance Pretty Ident where
     pPrint (Ident ident) = text (BS.unpack ident)

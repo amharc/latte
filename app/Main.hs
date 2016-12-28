@@ -6,9 +6,9 @@ import Control.Monad.IO.Class
 import qualified Language.Latte.Frontend.AST as P
 import qualified Language.Latte.Frontend.Parser as P
 import qualified Language.Latte.Middleend.GenIR as M
-import qualified Language.Latte.Middleend.IR as M
 import qualified Language.Latte.Middleend.Monad as M
 import qualified Language.Latte.Middleend.MemToReg as MemToReg
+import qualified Language.Latte.Middleend.SimplifyPhi as SimplifyPhi
 import Text.Parsec.ByteString
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -24,9 +24,12 @@ middle program = do
         M.generateIR program
         M.debugState >>= liftIO . putStrLn . render 
 
-        liftIO $ putStrLn "MemToReg"
-
+        liftIO $ putStrLn "\n\nMemToReg\n\n"
         MemToReg.opt
+        M.debugState >>= liftIO . putStrLn . render 
+
+        liftIO $ putStrLn "\n\nSimplifyPhi\n\n"
+        SimplifyPhi.opt
         M.debugState >>= liftIO . putStrLn . render 
 
     forM_ diags $ \diag ->
