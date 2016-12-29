@@ -5,7 +5,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import qualified Language.Latte.Frontend.AST as P
 import qualified Language.Latte.Frontend.Parser as P
-import qualified Language.Latte.Middleend.GenIR as M
+import qualified Language.Latte.Frontend.GenIR as P
 import qualified Language.Latte.Middleend.Monad as M
 import qualified Language.Latte.Middleend.MemToReg as MemToReg
 import qualified Language.Latte.Middleend.SimplifyPhi as SimplifyPhi
@@ -26,7 +26,7 @@ middle program = do
     putStrLn . render $ pPrint program
 
     diags <- M.run $ do
-        M.generateIR program
+        P.generateIR program
         M.debugState >>= liftIO . putStrLn . render 
 
         liftIO $ putStrLn "\n\nMemToReg\n\n"

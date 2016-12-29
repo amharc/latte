@@ -17,8 +17,8 @@ library
   hs-source-dirs:      src
   exposed-modules:     Language.Latte.Frontend.AST
                        Language.Latte.Frontend.Parser
+                       Language.Latte.Frontend.GenIR
                        Language.Latte.Middleend.IR
-                       Language.Latte.Middleend.GenIR
                        Language.Latte.Middleend.Monad
                        Language.Latte.Middleend.MemToReg
                        Language.Latte.Middleend.SimplifyPhi

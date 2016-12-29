@@ -9,7 +9,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# OPTIONS_GHC -fno-warn-unused-matches #-}
-module Language.Latte.Middleend.GenIR where
+module Language.Latte.Frontend.GenIR where
 
 import Control.Lens
 import Control.Monad
