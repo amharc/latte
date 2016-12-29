@@ -12,6 +12,7 @@ import qualified Language.Latte.Middleend.SimplifyPhi as SimplifyPhi
 import qualified Language.Latte.Middleend.SimplifyControlFlow as SimplifyControlFlow
 import qualified Language.Latte.Middleend.ShrinkEnds as ShrinkEnds
 import qualified Language.Latte.Middleend.Propagate as Propagate
+import qualified Language.Latte.Middleend.DeadCodeElimination as DeadCodeElimination
 import qualified Language.Latte.Middleend.Fixed as Fixed
 import Text.Parsec.ByteString
 import Text.PrettyPrint
@@ -47,6 +48,10 @@ middle program = do
 
             liftIO $ putStr "\n\nSimplify control flow\n\n"
             SimplifyControlFlow.opt
+            M.debugState >>= liftIO . putStrLn . render 
+
+            liftIO $ putStr "\n\nRemove dead code\n\n"
+            DeadCodeElimination.opt
             M.debugState >>= liftIO . putStrLn . render 
 
     forM_ diags $ \diag ->

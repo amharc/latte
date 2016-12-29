@@ -243,6 +243,9 @@ makeLenses ''PhiBranch
 instance Ord Block where
     compare = compare `on` _blockName
 
+instance Show Block where
+    show = views blockName show
+
 instance HasName Block where
     name = blockName
 
