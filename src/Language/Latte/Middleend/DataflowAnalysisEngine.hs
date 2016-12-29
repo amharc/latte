@@ -37,7 +37,7 @@ runDAE = uses meFunctions toList >>= fmap Map.unions . traverse function
   where
     function desc = reachableBlocks (desc ^. funcEntryBlock) >>= runDAEBlocks
 
-runDAEBlocks :: forall m a. (MonadIO m, DAE a) => [Block] -> m (Map.Map Block a)
+runDAEBlocks :: forall m a . (MonadIO m, DAE a) => [Block] -> m (Map.Map Block a)
 runDAEBlocks blocks = preds >>= go (Map.fromList [(block, mempty) | block <- blocks])
   where
     go prev preds = do

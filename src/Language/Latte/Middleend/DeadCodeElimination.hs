@@ -46,7 +46,7 @@ runBlock liveMap block = liftIO $ do
   where
     liveAfter = liveMap Map.! block
 
-    go :: (HasOperands a, Removable a) => a -> (Seq.Seq a, LiveVariables) -> (Seq.Seq a, LiveVariables)
+    go :: (HasOperands a, Removable a, HasNames a) => a -> (Seq.Seq a, LiveVariables) -> (Seq.Seq a, LiveVariables)
     go item (acc, live)
         | isRemovable item live = (acc, live)
         | otherwise = (item Seq.<| acc, step live item)
@@ -69,20 +69,21 @@ instance Monoid LiveVariables where
     mempty = LiveVariables Set.empty
     LiveVariables lhs `mappend` LiveVariables rhs = LiveVariables $ Set.union lhs rhs
 
-step :: (HasOperands a, Removable a) => LiveVariables -> a -> LiveVariables
+step :: (HasOperands a, Removable a, HasNames a) => LiveVariables -> a -> LiveVariables
 step live obj
-    | isRemovable obj live = live
-    | otherwise = stepSimple live obj
+    | isRemovable obj live = strip $ live
+    | otherwise = strip $ stepSimple live obj
   where
     stepSimple (LiveVariables live) obj = LiveVariables $ foldr Set.insert live (obj ^.. operands . _OperandNamed)
+    strip (LiveVariables live) = LiveVariables $ foldr Set.delete live (obj ^.. names)
 
-isLive :: HasName a => a -> LiveVariables -> Bool
-isLive obj (LiveVariables live) = Set.member (obj ^. name) live
+isLive :: HasNames a => a -> LiveVariables -> Bool
+isLive obj (LiveVariables live) = obj & anyOf names (flip Set.member live)
 
 class Removable a where
     isRemovable :: a -> LiveVariables -> Bool
 
-    default isRemovable :: HasName a => a -> LiveVariables -> Bool
+    default isRemovable :: HasNames a => a -> LiveVariables -> Bool
     isRemovable obj live = not $ isLive obj live
 
 instance Removable BlockEnd where

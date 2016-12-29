@@ -1,3 +1,4 @@
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
@@ -246,11 +247,29 @@ instance Ord Block where
 instance Show Block where
     show = views blockName show
 
+class HasNames a where
+    names :: Traversal' a Name
+
+    default names :: HasName a => Lens' a Name
+    names = name
+
+instance HasNames Name
+
 instance HasName Block where
     name = blockName
 
+instance HasNames Block
+
 instance HasName PhiNode where
     name = phiName
+
+instance HasNames PhiNode
+
+instance HasNames BlockEnd where
+    names _ = pure
+
+instance HasNames Instruction where
+    names = instrResult . traverse
 
 instance Pretty Ident where
     pPrint (Ident ident) = text (BS.unpack ident)
