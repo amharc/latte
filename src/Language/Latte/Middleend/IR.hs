@@ -340,7 +340,7 @@ instance Pretty GetAddr where
         ]
 
 instance Pretty Call where
-    pPrint call = "call" <+> pPrint (call ^. callDest) <> parens (sep . punctuate comma $ map pPrint (call ^. callArgs))
+    pPrint call = "call" <+> pPrint (call ^. callDest) <> parens (hsep . punctuate comma $ map pPrint (call ^. callArgs))
 
 instance Pretty Intristic where
     pPrint (IntristicAlloc size ty) = "alloc" <+> pPrint size <+> "bytes of" <+> pPrint ty
@@ -386,7 +386,7 @@ instance Pretty Block where
 
 instance Pretty BlockEnd where
     pPrint (BlockEndBranch target) = "branch to" <+> pPrint target
-    pPrint (BlockEndBranchCond cond targetTrue targetFalse) = sep
+    pPrint (BlockEndBranchCond cond targetTrue targetFalse) = hsep
         [ "branch to: if"
         ,  pPrint cond
         , "then"
@@ -399,12 +399,12 @@ instance Pretty BlockEnd where
     pPrint BlockEndNone = "must be unreachable"
 
 instance Pretty IncDec where
-    pPrint (SInc mem sz) = sep
+    pPrint (SInc mem sz) = hsep
         [ "increment"
         , pPrint sz
         , "at"
         , pPrint mem]
-    pPrint (SDec mem sz) = sep
+    pPrint (SDec mem sz) = hsep
         [ "decrement"
         , pPrint sz
         , "at"

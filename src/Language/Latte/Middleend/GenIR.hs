@@ -280,14 +280,9 @@ transExpr ex@(AST.Located l (AST.ExprCall funLval argExprs)) =
         Nothing -> do
             simpleError ex $ "Unresolved function, unable to call"
             pure (AST.TyInt, OperandUndef) -- TODO
-        Just (dest, info) -> do
+        Just (dest, arg, info) -> do
             checkCallArgumentsLength ex (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
-            args <- zipWithM prepareArg (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
-            args <- case info ^. funcInfoVtablePos of
-                Nothing -> pure args
-                Just _ -> do
-                    this <- OperandNamed <$> emitInstr Nothing (Load (MemoryArgument 0) SizePtr) l [InstrComment "load this"]
-                    pure (this : args)
+            args <- maybe id (:) arg <$> zipWithM prepareArg (info ^. funcInfoDecl . AST.obj . AST.funcArgs) argExprs
             ret <- emitInstr Nothing (Call dest args) l [InstrComment $ "call" <+> pPrint ex]
             pure (info ^. funcInfoDecl . AST.obj . AST.funcRetType, OperandNamed ret)
   where
@@ -450,15 +445,15 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
   where
     lengthField operandObj = (AST.TyInt, MemoryOffset operandObj (OperandInt 0) SizePtr)
 
-transFunCall :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (Maybe (Memory, FuncInfo))
+transFunCall :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (Maybe (Memory, Maybe Operand, FuncInfo))
 transFunCall (AST.Located l (AST.LvalVar name)) = view (girFunctions . at name) >>= \case
     Nothing -> pure Nothing
     Just info -> case info ^. funcInfoVtablePos of
-        Nothing -> pure $ Just (MemoryGlobal $ mangle Nothing name, info)
+        Nothing -> pure $ Just (MemoryGlobal $ mangle Nothing name, Nothing, info)
         Just offset -> do
             this <- OperandNamed <$> emitInstr (Just "this") (Load (MemoryArgument 0) SizePtr) l []
             addr <- virtualFuncAddr l this offset
-            pure $ Just (addr, info)
+            pure $ Just (addr, Just this, info)
 transFunCall lval@(AST.Located l (AST.LvalField objExpr name)) = do
     (objTy, objOperand) <- transExpr objExpr
     case objTy of
@@ -469,7 +464,7 @@ transFunCall lval@(AST.Located l (AST.LvalField objExpr name)) = do
                     pure Nothing
                 Just info -> do
                     addr <- virtualFuncAddr l objOperand (info ^. funcInfoVtablePos . singular _Just)
-                    pure $ Just (addr, info)
+                    pure $ Just (addr, Just objOperand, info)
         _ -> do
             simpleError lval $ "not a class"
             pure Nothing
