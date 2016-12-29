@@ -765,7 +765,7 @@ emitInstr :: GIRMonad m => Maybe Ident -> InstrPayload -> AST.LocRange -> [Instr
 emitInstr humanName payload loc meta = do
     result <- mkName humanName
     ioref <- use $ girCurrentBlock . blockBody
-    liftIO $ modifyIORef' ioref (Seq.|> Instruction result payload (InstrLocation loc : meta))
+    liftIO $ modifyIORef' ioref (Seq.|> Instruction (Just result) payload (InstrLocation loc : meta))
     pure result
 
 emitPhi :: GIRMonad m => Maybe Ident -> [PhiBranch] -> m Name

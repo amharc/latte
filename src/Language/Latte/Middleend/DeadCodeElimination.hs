@@ -4,7 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
-module Language.Latte.Middleend.DeadCodeElimination (opt) where
+module Language.Latte.Middleend.DeadCodeElimination (opt, LiveVariables(..)) where
 
 import Control.Lens
 import Control.Monad.IO.Class
@@ -20,7 +20,7 @@ import qualified Language.Latte.Middleend.DataflowAnalysisEngine as DAE
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
 
-newtype LiveVariables = LiveVariables (Set.Set Name)
+newtype LiveVariables = LiveVariables { getLiveVariables :: Set.Set Name }
     deriving (Eq, Show)
 
 opt :: (MonadIO m, MonadState s m, HasMiddleEndState s) => m ()
@@ -38,7 +38,7 @@ runBlock liveMap block = liftIO $ do
     body <- readIORef $ block ^. blockBody
     end <- readIORef $ block ^. blockEnd
 
-    let (body', liveBeforeBody) = foldr go (Seq.empty, step liveAfter end) body
+    let (body', liveBeforeBody) = foldr goInstr (Seq.empty, step liveAfter end) body
         (phi', _) = foldr go (Seq.empty, liveBeforeBody) phi
 
     writeIORef (block ^. blockPhi) phi'
@@ -50,6 +50,13 @@ runBlock liveMap block = liftIO $ do
     go item (acc, live)
         | isRemovable item live = (acc, live)
         | otherwise = (item Seq.<| acc, step live item)
+
+    goInstr :: Instruction -> (Seq.Seq Instruction, LiveVariables) -> (Seq.Seq Instruction, LiveVariables)
+    goInstr item (acc, live)
+        | isRemovable item live = (acc, live)
+        | Just name <- item ^. instrResult
+        , isLive name live = (item Seq.<| acc, step live item)
+        | otherwise = ((item & instrResult .~ Nothing) Seq.<| acc, step live item)
 
 instance DAE.DAE LiveVariables where
     direction = DAE.DAEBackward
@@ -87,7 +94,7 @@ instance Removable Instruction where
         Store _ _ _ -> False
         Inc _ _ -> False
         Dec _ _ -> False
-        _ -> not $ isLive instr live
+        _ -> not $ any (flip isLive live) (instr ^. instrResult)
 
 instance Removable PhiNode where
 

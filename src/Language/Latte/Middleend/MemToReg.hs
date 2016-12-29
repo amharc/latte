@@ -57,8 +57,8 @@ resetEntryBlock matchables block = do
     liftIO $ writeIORef (block ^. blockPhi) Seq.empty
     iforM_ matchables $ \matchable name ->
         case matchable of
-            MatchableLocal _ _ -> emit (Instruction name (IConst OperandUndef) [])
-            MatchableArgument size idx -> emit (Instruction name (Load (MemoryArgument idx) size) [])
+            MatchableLocal _ _ -> emit (Instruction (Just name) (IConst OperandUndef) [])
+            MatchableArgument size idx -> emit (Instruction (Just name) (Load (MemoryArgument idx) size) [])
   where
     emit instr = liftIO $ modifyIORef' (block ^. blockBody) (instr Seq.<|)
 
@@ -74,13 +74,15 @@ runInstruction i@(view instrPayload -> Inc arg size) (instrs, matchables)
     | Just matchable <- getMatchable size arg
     , Just operand <- Map.lookup matchable matchables
     = ( instrs Seq.|> (i & instrPayload .~ BinOp operand BinOpPlus (OperandInt 1))
-      , Map.insert matchable (OperandNamed $ i ^. instrResult) matchables
+        -- assumes this instruction has a name
+      , Map.insert matchable (OperandNamed $ i ^. instrResult . singular _Just) matchables
       )
 runInstruction i@(view instrPayload -> Dec arg size) (instrs, matchables)
     | Just matchable <- getMatchable size arg
     , Just operand <- Map.lookup matchable matchables
     = ( instrs Seq.|> (i & instrPayload .~ BinOp operand BinOpMinus (OperandInt 1))
-      , Map.insert matchable (OperandNamed $ i ^. instrResult) matchables
+        -- assumes this instruction has a name
+      , Map.insert matchable (OperandNamed $ i ^. instrResult . singular _Just) matchables
       )
 runInstruction instr (instrs, matchables) = (instrs Seq.|> instr, matchables)
 

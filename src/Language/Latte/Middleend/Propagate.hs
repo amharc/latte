@@ -41,7 +41,7 @@ runInstruction acc instr = do
     case views instrPayload valueOf instr' of
         Nothing -> pure $ acc Seq.|> instr'
         Just op -> do
-            at (instr ^. name) ?= op
+            forM_ (instr ^. instrResult) $ \name -> at name ?= op
             pure acc
   where
     valueOf (IConst op) = Just op

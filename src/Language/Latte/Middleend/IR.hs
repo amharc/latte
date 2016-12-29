@@ -81,7 +81,7 @@ data InstrPayload
     deriving (Eq, Show)
 
 data Instruction = Instruction
-    { _instrResult :: !Name
+    { _instrResult :: !(Maybe Name)
     , _instrPayload :: !InstrPayload
     , _instrMetadata :: [InstrMetadata]
     }
@@ -249,9 +249,6 @@ instance Show Block where
 instance HasName Block where
     name = blockName
 
-instance HasName Instruction where
-    name = instrResult
-
 instance HasName PhiNode where
     name = phiName
 
@@ -369,8 +366,7 @@ instance Pretty InstrPayload where
 
 instance Pretty Instruction where
     pPrint instr = hsep
-        [ pPrint (instr ^. instrResult)
-        , "="
+        [ maybe empty (\name -> pPrint name <+> "=") (instr ^. instrResult)
         , pPrint (instr ^. instrPayload)
         , "#"
         , hsep . punctuate semi $ map pPrint (instr ^. instrMetadata)

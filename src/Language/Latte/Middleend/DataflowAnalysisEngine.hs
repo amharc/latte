@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
-module Language.Latte.Middleend.DataflowAnalysisEngine (DAEDirection(..), DAEPostProcess(..), DAE(..), runDAE) where
+module Language.Latte.Middleend.DataflowAnalysisEngine (DAEDirection(..), DAEPostProcess(..), DAE(..), runDAE, runDAEBlocks) where
 
 import Control.Monad.IO.Class
 import Control.Monad.State
@@ -35,10 +35,10 @@ class (Monoid a, Eq a, Pretty a) => DAE a where
 runDAE :: (MonadIO m, MonadState s m, HasMiddleEndState s, DAE a) => m (Map.Map Block a)
 runDAE = uses meFunctions toList >>= fmap Map.unions . traverse function
   where
-    function desc = reachableBlocks (desc ^. funcEntryBlock) >>= run'
+    function desc = reachableBlocks (desc ^. funcEntryBlock) >>= runDAEBlocks
 
-run' :: forall m a. (MonadIO m, DAE a) => [Block] -> m (Map.Map Block a)
-run' blocks = preds >>= go (Map.fromList [(block, mempty) | block <- blocks])
+runDAEBlocks :: forall m a. (MonadIO m, DAE a) => [Block] -> m (Map.Map Block a)
+runDAEBlocks blocks = preds >>= go (Map.fromList [(block, mempty) | block <- blocks])
   where
     go prev preds = do
         cur <- iteration preds order prev

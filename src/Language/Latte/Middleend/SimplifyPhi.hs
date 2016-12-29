@@ -42,5 +42,5 @@ updatePhis blocks block = foldrM go Seq.empty
             succs <- successors $ branch ^. phiFrom
             pure $ block `elem` succs
 
-    push name value = liftIO $ modifyIORef (block ^. blockBody) (Instruction name (IConst value) [] Seq.<|)
+    push name value = liftIO $ modifyIORef (block ^. blockBody) (Instruction (Just name) (IConst value) [] Seq.<|)
         
