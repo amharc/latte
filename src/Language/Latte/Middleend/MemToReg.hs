@@ -30,13 +30,14 @@ runFunction desc = do
              (matchable,) <$> mkName (Just $ matchableName matchable)
     let startValues = startNames & traverse . traverse %~ OperandNamed
     endValues <- zipWithM runBlock blocks startValues
-    let phiBranches = Map.fromList
+    preds <- predecessors blocks
+    let phiBranches block = Map.fromList
             [ ( matchable
-              , [PhiBranch block (values Map.! matchable) | block <- blocks | values <- endValues]
+              , [PhiBranch pred (values Map.! matchable) | pred <- preds Map.! block | values <- endValues]
               )
             | matchable <- matchables
             ]
-    zipWithM_ (addPhiNodes phiBranches) blocks startNames
+    zipWithM_ (addPhiNodes =<< phiBranches) blocks startNames
     resetEntryBlock (head startNames) $ desc ^. funcEntryBlock
 
 runBlock :: MonadIO m => Block -> Bindings -> m Bindings
