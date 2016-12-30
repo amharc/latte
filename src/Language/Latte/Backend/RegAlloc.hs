@@ -57,7 +57,6 @@ interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty
     
     addDirected a b = getInterferenceGraph . at a . non Set.empty . contains b .= True
 
-
 mcsOrder :: MonadIO m => [Block] -> InterferenceGraph -> m [Name]
 mcsOrder blocks graph = do
     names <- Set.unions <$> mapM getNames blocks
