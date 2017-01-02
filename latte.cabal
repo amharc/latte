@@ -29,6 +29,8 @@ library
                        Language.Latte.Middleend.DataflowAnalysisEngine
                        Language.Latte.Middleend.DeadCodeElimination
                        Language.Latte.Backend.RegAlloc
+                       Language.Latte.Backend.Asm
+                       Language.Latte.Backend.CodeGen
   build-depends:       base >= 4.9 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0

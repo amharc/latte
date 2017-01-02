@@ -12,7 +12,6 @@ module Language.Latte.Middleend.IR where
 import Control.Lens
 import Control.Monad.IO.Class
 import Control.Monad.State
-import qualified Control.Monad.Writer as Writer
 import qualified Data.ByteString.Char8 as BS
 import Data.Foldable
 import Data.Function
@@ -464,15 +463,15 @@ successors block = liftIO $ readIORef (block ^. blockEnd) >>= \case
 
 -- |Returns the reachable blocks in reverse postorder
 reachableBlocks :: MonadIO m => Block -> m [Block]
-reachableBlocks block = fmap (reverse . toList) . Writer.execWriterT $ evalStateT (go block) Set.empty
+reachableBlocks block = snd <$> execStateT (go block) (Set.empty, [])
   where
-    go :: (MonadIO m, MonadState (Set.Set Block) m, Writer.MonadWriter (Seq.Seq Block) m) => Block -> m ()
+    go :: (MonadIO m, MonadState (Set.Set Block, [Block]) m) => Block -> m ()
     go block = do
-        alreadyVisited <- use $ contains block
+        alreadyVisited <- use $ _1 . contains block
         unless alreadyVisited $ do
-            contains block .= True
+            _1 . contains block .= True
             successors block >>= mapM_ go
-            Writer.tell $ Seq.singleton block
+            _2 %= cons block
 
 predecessors :: MonadIO m => [Block] -> m (Map.Map Block [Block])
 predecessors = foldlM go Map.empty
