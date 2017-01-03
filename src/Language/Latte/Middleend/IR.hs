@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Middleend.IR where
@@ -35,32 +36,32 @@ data Object = Object
     }
 
 data ObjectField = ObjectField
-    { _objectFieldData :: !ObjectFieldData
+    { _objectFieldData :: ObjectFieldData
     }
 
 data ObjectFieldData
-    = ObjectFieldInt !Int
+    = ObjectFieldInt Int
     | ObjectFieldNull
-    | ObjectFieldRef !Ident
+    | ObjectFieldRef Ident
 
 data Operand
-    = OperandNamed !Name
-    | OperandSize !Size
-    | OperandInt !Int
+    = OperandNamed Name
+    | OperandSize Size
+    | OperandInt Int
     | OperandUndef
     deriving (Eq, Ord, Show)
 
 data Name = Name
-    { _nameUnique :: {-# UNPACK #-} !UniqueId
-    , _nameHuman :: !(Maybe Ident)
+    { _nameUnique :: {-# UNPACK #-} UniqueId
+    , _nameHuman :: (Maybe Ident)
     }
     deriving (Eq, Ord, Show)
 
 data Memory
-    = MemoryLocal {-# UNPACK #-} !Int
-    | MemoryArgument {-# UNPACK #-} !Int
-    | MemoryOffset !Operand !Operand !Size
-    | MemoryGlobal !Ident
+    = MemoryLocal {-# UNPACK #-} Int
+    | MemoryArgument {-# UNPACK #-} Int
+    | MemoryOffset Operand Operand Size
+    | MemoryGlobal Ident
     | MemoryUndef
     deriving (Eq, Show)
 
@@ -71,61 +72,61 @@ data Size = Size0 | Size8 | Size32 | Size64 | SizePtr
     deriving (Eq, Ord, Show)
 
 data InstrPayload
-    = ILoad !Load
-    | IStore !Store
-    | IBinOp !BinOp
-    | IUnOp !UnOp
-    | IGetAddr !GetAddr
-    | ICall !Call
-    | IIntristic !Intristic
-    | IIncDec !IncDec
-    | IConst !Operand
+    = ILoad Load
+    | IStore Store
+    | IBinOp BinOp
+    | IUnOp UnOp
+    | IGetAddr GetAddr
+    | ICall Call
+    | IIntristic Intristic
+    | IIncDec IncDec
+    | IConst Operand
     deriving (Eq, Show)
 
 data Instruction = Instruction
-    { _instrResult :: !(Maybe Name)
-    , _instrPayload :: !InstrPayload
+    { _instrResult :: (Maybe Name)
+    , _instrPayload :: InstrPayload
     , _instrMetadata :: [InstrMetadata]
     }
     deriving (Eq, Show)
 
 data InstrMetadata
-    = InstrComment !Doc
+    = InstrComment Doc
     | InstrInvariant
-    | InstrLocation !Frontend.LocRange
+    | InstrLocation Frontend.LocRange
     deriving (Eq, Show)
 
 data Block = Block
-    { _blockName :: !Name
-    , _blockPhi :: {-# UNPACK #-} !(IORef (Seq.Seq PhiNode))
-    , _blockBody :: {-# UNPACK #-} !(IORef (Seq.Seq Instruction))
-    , _blockEnd :: {-# UNPACK #-} !(IORef BlockEnd)
+    { _blockName :: Name
+    , _blockPhi :: {-# UNPACK #-} (IORef (Seq.Seq PhiNode))
+    , _blockBody :: {-# UNPACK #-} (IORef (Seq.Seq Instruction))
+    , _blockEnd :: {-# UNPACK #-} (IORef BlockEnd)
     }
     deriving Eq
 
 data PhiNode = PhiNode
-    { _phiName :: !Name
+    { _phiName :: Name
     , _phiBranches :: [PhiBranch]
     }
     deriving Eq
 
 data PhiBranch = PhiBranch
-    { _phiFrom :: !Block
-    , _phiValue :: !Operand
+    { _phiFrom :: Block
+    , _phiValue :: Operand
     }
     deriving Eq
 
 data BlockEnd
-    = BlockEndBranch !Block
-    | BlockEndBranchCond !Operand !Block !Block
-    | BlockEndReturn !Operand
+    = BlockEndBranch Block
+    | BlockEndBranchCond Operand Block Block
+    | BlockEndReturn Operand
     | BlockEndReturnVoid
     | BlockEndNone
     deriving Eq
 
 data Load = SLoad
-    { _loadFrom :: !Memory
-    , _loadSize :: !Size
+    { _loadFrom :: Memory
+    , _loadSize :: Size
     }
     deriving (Eq, Show)
 
@@ -133,9 +134,9 @@ pattern Load :: Memory -> Size -> InstrPayload
 pattern Load from size = ILoad (SLoad from size)
 
 data Store = SStore
-    { _storeTo :: !Memory
-    , _storeSize :: !Size
-    , _storeValue :: !Operand
+    { _storeTo :: Memory
+    , _storeSize :: Size
+    , _storeValue :: Operand
     }
     deriving (Eq, Show)
 
@@ -143,9 +144,9 @@ pattern Store :: Memory -> Size -> Operand -> InstrPayload
 pattern Store to size value = IStore (SStore to size value)
 
 data BinOp = SBinOp
-    { _binOpLhs :: !Operand
-    , _binOpOp ::  !BinOperator
-    , _binOpRhs :: !Operand
+    { _binOpLhs :: Operand
+    , _binOpOp ::  BinOperator
+    , _binOpRhs :: Operand
     }
     deriving (Eq, Show)
 
@@ -153,8 +154,8 @@ pattern BinOp :: Operand -> BinOperator -> Operand -> InstrPayload
 pattern BinOp lhs op rhs = IBinOp (SBinOp lhs op rhs)
 
 data UnOp = SUnOp
-    { _unOpOp :: !UnOperator
-    , _unOpArg :: !Operand
+    { _unOpOp :: UnOperator
+    , _unOpArg :: Operand
     }
     deriving (Eq, Show)
 
@@ -168,7 +169,7 @@ pattern GetAddr :: Memory -> InstrPayload
 pattern GetAddr mem = IGetAddr (SGetAddr mem)
 
 data Call = SCall
-    { _callDest :: !Memory
+    { _callDest :: Memory
     , _callArgs :: [Operand]
     }
     deriving (Eq, Show)
@@ -198,9 +199,9 @@ data UnOperator
     deriving (Eq, Show)
 
 data Intristic
-    = IntristicAlloc !Operand !ObjectType
-    | IntristicClone !Memory
-    | IntristicConcat !Operand !Operand
+    = IntristicAlloc Operand ObjectType
+    | IntristicClone Memory
+    | IntristicConcat Operand Operand
     deriving (Eq, Show)
 
 data ObjectType
@@ -210,12 +211,12 @@ data ObjectType
     | ObjectString
     | ObjectPrimArray
     | ObjectArray
-    | ObjectClass !Ident
+    | ObjectClass Ident
     deriving (Eq, Show)
 
 data IncDec
-    = SInc { _incDecMemory :: !Memory, _incDecSize :: !Size }
-    | SDec { _incDecMemory :: !Memory, _incDecSize :: !Size }
+    = SInc { _incDecMemory :: Memory, _incDecSize :: Size }
+    | SDec { _incDecMemory :: Memory, _incDecSize :: Size }
     deriving (Eq, Show)
 
 pattern Inc :: Memory -> Size -> InstrPayload
@@ -336,7 +337,7 @@ instance Pretty BinOperator where
     pPrint BinOpGreater = ">"
     pPrint BinOpGreaterEqual = ">="
     pPrint BinOpEqual = "=="
-    pPrint BinOpNotEqual = "!="
+    pPrint BinOpNotEqual = "="
     pPrint BinOpAnd = "&&"
     pPrint BinOpOr = "||"
 
@@ -348,7 +349,7 @@ instance Pretty UnOp where
 
 instance Pretty UnOperator where
     pPrint UnOpNeg = "-"
-    pPrint UnOpNot = "!"
+    pPrint UnOpNot = ""
 
 instance Pretty GetAddr where
     pPrint getAddr = hsep
@@ -394,7 +395,7 @@ instance Pretty Instruction where
 
 instance Pretty InstrMetadata where
     pPrint (InstrComment comment) = comment
-    pPrint InstrInvariant = "!invariant"
+    pPrint InstrInvariant = "invariant"
     pPrint (InstrLocation loc) = "at" <+> pPrint loc
 
 instance Pretty Block where

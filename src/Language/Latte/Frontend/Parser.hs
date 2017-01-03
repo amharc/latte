@@ -4,6 +4,7 @@
 module Language.Latte.Frontend.Parser where
 
 import Control.Lens
+import Control.Monad
 import qualified Data.ByteString.Char8 as BS
 import Data.Semigroup ((<>))
 import Language.Latte.Frontend.AST
@@ -116,17 +117,20 @@ topLevelDecl =    (TLDFunc <$> funcDecl)
 
 funcDecl :: Parser FuncDecl
 funcDecl = do
-    retType <- type_
+    retType <- type_ True
     name <- ident
     args <- parens (commaSep $ located funArg) <?> "arguments list"
-    body <- located (braces . many $ located stmt) <?> "function body"
+    body <- located (braces . many $ located (stmt True)) <?> "function body"
     pure $ FuncDecl name args retType (StmtBlock <$> body)
 
-type_ :: Parser Type
-type_ = do
-    base <- simpleType
-    dims <- many . brackets $ pure ()
-    pure $ foldl (const . TyArray) base dims
+type_ :: Bool -> Parser Type
+type_ voidAllowed = simpleType >>= \case
+    TyVoid
+        | voidAllowed -> pure TyVoid
+        | otherwise -> unexpected "void"
+    base -> do
+        dims <- many . brackets $ pure ()
+        pure $ foldl (const . TyArray) base dims
 
 simpleType :: Parser Type
 simpleType =     (reserved "int" >> pure TyInt)
@@ -137,19 +141,20 @@ simpleType =     (reserved "int" >> pure TyInt)
              <?> "base type"
 
 funArg :: Parser FunArg
-funArg = FunArg <$> type_ <*> ident
+funArg = FunArg <$> type_ False <*> ident
 
-stmt :: Parser Stmt
-stmt =    braces (StmtBlock <$> many (located stmt))
+stmt :: Bool -> Parser Stmt
+stmt declAllowed =
+          braces (StmtBlock <$> many (located $ stmt True))
       <|> (reserved "return" >> StmtReturn <$> optionMaybe (located expr) <* semi)
-      <|> (reserved "if" >> StmtIf <$> parens (located expr) <*> located stmt 
-           <*> optionMaybe (reserved "else" >>located stmt))
-      <|> (reserved "while" >> StmtWhile <$> parens (located expr) <*> located stmt)
+      <|> (reserved "if" >> StmtIf <$> parens (located expr) <*> located (stmt False)
+           <*> optionMaybe (reserved "else" >> located (stmt False)))
+      <|> (reserved "while" >> StmtWhile <$> parens (located expr) <*> located (stmt False))
       <|> (do
             reserved "for"
-            (ty, name, ex) <- parens ((,,) <$> type_ <*> ident <* colon <*> located expr)
-            StmtFor ty name ex <$> located stmt)
-      <|> try (StmtDecl <$> localDecl <* semi)
+            (ty, name, ex) <- parens ((,,) <$> type_ False <*> ident <* colon <*> located expr)
+            StmtFor ty name ex <$> located (stmt False))
+      <|> (if declAllowed then try (StmtDecl <$> localDecl <* semi) else unexpected "declaration")
       <|> (exprBased <* semi)
       <|> (semi >> pure StmtNone)
       <?> "statement"
@@ -164,23 +169,27 @@ stmt =    braces (StmtBlock <$> many (located stmt))
         Located _ e -> pure $ StmtExpr e
 
 expr :: Parser Expr
-expr = view obj <$> buildExpressionParser opsTable (located cast)
+expr = (view obj <$> buildExpressionParser opsTable (located cast)) <?> "expression"
   where
-    cast = try (ExprCast <$> parens type_ <*> located call)
-        <|> call
+    cast = try (ExprCast <$> parens (type_ False) <*> located cast)
+        <|> complex
 
-    call = located complexLval >>= \case
-        Located l e@(ExprLval lval) ->
-            option e (ExprCall (Located l lval) <$> parens (commaSep $ located expr))
-        Located _ e -> pure e
-
-    complexLval = do
-        e <- located basic
-        choice
-            [ dot >> ExprLval . LvalField e <$> ident
-            , ExprLval . LvalArray e <$> brackets (located expr)
-            , pure $ e ^. obj
+    complex = view obj <$> (located basic >>= go)
+      where
+        go :: Located Expr -> Parser (Located Expr)
+        go acc = choice
+            [ meld acc (dot >> ExprLval . LvalField acc <$> ident) >>= go
+            , meld acc (ExprLval . LvalArray acc <$> brackets (located expr)) >>= go
+            , (case acc of
+                Located l (ExprLval lval) ->
+                    meld acc (ExprCall (Located l lval) <$> parens (commaSep $ located expr)) >>= go
+                _ -> unexpected "function call")
+            , pure acc
             ]
+
+        meld acc parser = do
+            x <- located parser
+            pure (Located (acc ^. loc <> x ^. loc) $ x ^. obj)
 
     basic =    (reserved "true" >> pure ExprTrue)
            <|> (reserved "false" >> pure ExprFalse)
@@ -191,8 +200,13 @@ expr = view obj <$> buildExpressionParser opsTable (located cast)
            <|> parens expr
            <|> (ExprLval . LvalVar <$> ident)
     
-    -- TODO
-    int = ExprInt . fromInteger <$> integer
+    int = do
+        val <- integer
+        when (val < intMinBound || val > intMaxBound) $ unexpected "integer overflow"
+        pure . ExprInt $ fromInteger val
+
+    intMinBound = - 2 ^ 31
+    intMaxBound = 2 ^ 31 - 1
 
     new = do
         reserved "new"
@@ -204,7 +218,7 @@ expr = view obj <$> buildExpressionParser opsTable (located cast)
             pure $ ExprNewArr ty' dim
 
 localDecl :: Parser LocalDecl
-localDecl = LocalDecl <$> type_ <*> (located localDeclItem `sepBy` comma) <?> "declaration"
+localDecl = LocalDecl <$> type_ False <*> (located localDeclItem `sepBy` comma) <?> "declaration"
 
 localDeclItem :: Parser LocalDeclItem
 localDeclItem = LocalDeclItem <$> ident <*> optionMaybe (reservedOp "=" >> located expr)
@@ -219,4 +233,4 @@ classDecl = do
   where
     member = try (ClassMemberField <$> field)
              <|> (ClassMemberMethod <$> funcDecl)
-    field = ClassField <$> type_ <*> ident <* semi
+    field = ClassField <$> type_ False <*> ident <* semi

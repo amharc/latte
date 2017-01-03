@@ -15,6 +15,7 @@ import Data.IORef
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
+import GHC.Stack
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
 
@@ -62,7 +63,7 @@ resetEntryBlock matchables block = do
   where
     emit instr = liftIO $ modifyIORef' (block ^. blockBody) (instr Seq.<|)
 
-runInstruction :: Instruction -> (Seq.Seq Instruction, Bindings) -> (Seq.Seq Instruction, Bindings)
+runInstruction :: HasCallStack => Instruction -> (Seq.Seq Instruction, Bindings) -> (Seq.Seq Instruction, Bindings)
 runInstruction i@(view instrPayload -> Load from size) (instrs, matchables)
     | Just matchable <- getMatchable size from
     , Just operand <- Map.lookup matchable matchables

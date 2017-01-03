@@ -62,7 +62,7 @@ data ClassField = ClassField
     , _classFieldId :: Int
     }
 
-type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m)
+type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m, HasCallStack)
 
 data Variable = Variable
     { _varType :: !AST.Type
@@ -123,7 +123,7 @@ isReachable = use (girCurrentBlock . blockEnd) >>= liftIO . readIORef >>= \case
     BlockEndNone -> pure True
     _ -> pure False
 
-transStmt :: (HasCallStack, GIRMonad m) => AST.Located AST.Stmt -> m ()
+transStmt :: GIRMonad m => AST.Located AST.Stmt -> m ()
 transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
     oldVariables <- use girVariables
 
@@ -140,7 +140,7 @@ transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
         block <- use girCurrentBlock
 
         use (girVariables . at (item ^. AST.obj ^. AST.localDeclName)) >>= \case
-            Just var | var ^. varDefinedIn == Just block ->
+            Just var | var ^. varState == VarUndefined ->
                 simpleError item $ "Duplicate definition of variable"
             _ -> pure ()
 
@@ -261,7 +261,7 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
             li [InstrComment $ "initialize" <+> pPrint item]
 transStmt st@(AST.Located l AST.StmtNone) = pure ()
 
-transExpr :: (HasCallStack, GIRMonad m) => AST.Located AST.Expr -> m (AST.Type, Operand)
+transExpr :: GIRMonad m => AST.Located AST.Expr -> m (AST.Type, Operand)
 transExpr   (AST.Located l (AST.ExprLval lval)) = do
     (ty, memory) <- transLval (AST.Located l lval)
     value <- emitInstr Nothing (Load memory (sizeOf ty)) l [InstrComment $ "load" <+> pPrint lval]
@@ -397,7 +397,7 @@ transExprTypeEqual expectedType expr = do
     checkTypeEqual expr expectedType ty
     pure operand
 
-transLval :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (AST.Type, Memory)
+transLval :: GIRMonad m => AST.Located AST.Lval -> m (AST.Type, Memory)
 transLval lval@(AST.Located l (AST.LvalVar ident)) =
     use (girVariables . at ident) >>= \case
         Nothing -> views girCurrentClass (>>= view (classFields . at ident)) >>= \case
@@ -445,7 +445,7 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
   where
     lengthField operandObj = (AST.TyInt, MemoryOffset operandObj (OperandInt 0) SizePtr)
 
-transFunCall :: (HasCallStack, GIRMonad m) => AST.Located AST.Lval -> m (Maybe (Memory, Maybe Operand, FuncInfo))
+transFunCall :: GIRMonad m => AST.Located AST.Lval -> m (Maybe (Memory, Maybe Operand, FuncInfo))
 transFunCall (AST.Located l (AST.LvalVar name)) = view (girFunctions . at name) >>= \case
     Nothing -> pure Nothing
     Just info -> case info ^. funcInfoVtablePos of
@@ -478,7 +478,7 @@ virtualFuncAddr l obj idx = do
         l [InstrComment "load vtable ptr", InstrInvariant]
     pure $ MemoryOffset vtablePtr (OperandInt idx) SizePtr
 
-transFuncDecl :: (HasCallStack, GIRMonad m) => Maybe AST.Ident -> AST.Located AST.FuncDecl -> m ()
+transFuncDecl :: GIRMonad m => Maybe AST.Ident -> AST.Located AST.FuncDecl -> m ()
 transFuncDecl mClass locDecl@(AST.Located l decl) = do
     entryBlock <- newBlock "entry"
 
@@ -550,7 +550,7 @@ emitPrototype info = internObject (mangleClassPrototype name) prototype
     defaultValue AST.TyNull = ObjectFieldNull
     defaultValue AST.TyString = ObjectFieldRef "LATC_emptyString"
 
-transProgram :: (HasCallStack, GIRMonad m) => AST.Program -> m ()
+transProgram :: GIRMonad m => AST.Program -> m ()
 transProgram (AST.Program prog) = do
     functionsMap' <- view girFunctions
     functionsMap <- foldM addFunction functionsMap' functions
@@ -702,7 +702,7 @@ checkType ctx (AST.TyClass name) =
 simpleError :: (GIRMonad m, Reportible r) => r -> Doc -> m ()
 simpleError ctx head = report Diagnostic
     { _diagWhere = Just $ ctx ^. AST.locRange
-    , _diagContent = hang head 4 (pPrint ctx)
+    , _diagContent = head $+$ nest 4 (pPrint ctx)
     , _diagType = DiagnosticError
     , _diagNotes = []
     }

@@ -32,7 +32,6 @@ middle program = do
         liftIO $ putStrLn "\n\nMemToReg\n\n"
         MemToReg.opt
         M.debugState >>= liftIO . putStrLn . render 
-
         Fixed.iterOpt 1000 $ do
             liftIO $ putStr "\n\nSimplifyPhi\n\n"
             SimplifyPhi.opt
