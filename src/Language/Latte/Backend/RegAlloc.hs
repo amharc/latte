@@ -77,7 +77,7 @@ mcsOrder blocks graph = do
     phase = do
         picked <- uses mcsStateLambda pick
         mcsStateOrder %= flip snoc picked
-        forM_ (graph ^. getInterferenceGraph . at picked . singular _Just) $ \neighbour ->
+        forM_ (graph ^. getInterferenceGraph . at picked . non Set.empty) $ \neighbour ->
             mcsStateLambda . at neighbour . traverse += 1
         mcsStateLambda . at picked .= Nothing
 

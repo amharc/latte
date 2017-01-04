@@ -44,7 +44,13 @@ data ObjectFieldData
     | ObjectFieldNull
     | ObjectFieldRef Ident
 
-data Operand
+data Operand = Operand
+    { _operandPayload :: OperandPayload
+    , _operandSize :: Size
+    }
+    deriving (Eq, Ord, Show)
+
+data OperandPayload
     = OperandNamed Name
     | OperandSize Size
     | OperandInt Int
@@ -66,7 +72,7 @@ data Memory
     deriving (Eq, Show)
 
 pattern MemoryPointer :: Operand -> Memory
-pattern MemoryPointer ptr = MemoryOffset ptr (OperandInt 0) SizePtr
+pattern MemoryPointer ptr = MemoryOffset ptr (Operand (OperandInt 0) SizePtr) SizePtr
 
 data Size = Size0 | Size8 | Size32 | Size64 | SizePtr
     deriving (Eq, Ord, Show)
@@ -233,7 +239,8 @@ makeLenses ''UnOp
 makeLenses ''GetAddr
 makeLenses ''Call
 makePrisms ''InstrPayload
-makePrisms ''Operand
+makeLenses ''Operand
+makePrisms ''OperandPayload
 makePrisms ''Memory
 makeLenses ''Instruction
 makeLenses ''Block
@@ -280,6 +287,9 @@ instance Pretty UniqueId where
     pPrint (UniqueId ident) = int ident
 
 instance Pretty Operand where
+    pPrint op = pPrint (op ^. operandSize) <+> "value" <+> pPrint (op ^. operandPayload)
+
+instance Pretty OperandPayload where
     pPrint (OperandNamed n) = pPrint n
     pPrint (OperandInt i) = int i
     pPrint (OperandSize sz) = "sizeof" <+> pPrint sz

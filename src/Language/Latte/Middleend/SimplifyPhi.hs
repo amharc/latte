@@ -29,14 +29,14 @@ updatePhis :: (MonadIO m) => Set.Set Block -> Block -> Seq.Seq PhiNode -> m (Seq
 updatePhis blocks block = foldrM go Seq.empty
   where
     go node acc = (filterM incoming $ node ^. phiBranches) >>= \case
-        [] -> push (node ^. name) OperandUndef >> pure acc
+        [] -> push (node ^. name) (Operand OperandUndef SizePtr) >> pure acc
         [branch] -> push (node ^. name) (branch ^. phiValue) >> pure acc
-        branches -> case Set.toList $ Set.fromList [branch ^. phiValue | branch <- branches, branch ^. phiValue /= OperandNamed (node ^. name)] of
+        branches -> case Set.toList $ Set.fromList [branch ^. phiValue | branch <- branches, branch ^. phiValue ^. operandPayload /= OperandNamed (node ^. name)] of
             [target] -> push (node ^. name) target >> pure acc
             _ -> pure ((node & phiBranches .~ branches) Seq.<| acc)
 
     incoming branch 
-        | OperandUndef <- branch ^. phiValue = pure False
+        | OperandUndef <- branch ^. phiValue . operandPayload = pure False
         | not (Set.member (branch ^. phiFrom) blocks) = pure False
         | otherwise = do
             succs <- successors $ branch ^. phiFrom

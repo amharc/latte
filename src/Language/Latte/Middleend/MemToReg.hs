@@ -29,7 +29,7 @@ runFunction desc = do
     startNames <- replicateM (length blocks) . fmap Map.fromList $
          forM matchables $ \matchable ->
              (matchable,) <$> mkName (Just $ matchableName matchable)
-    let startValues = startNames & traverse . traverse %~ OperandNamed
+    let startValues = startNames & traverse %~ imap (\m v -> Operand (OperandNamed v) (matchableSize m))
     endValues <- zipWithM runBlock blocks startValues
     preds <- predecessors blocks
     let phiBranches block = Map.fromList
@@ -58,7 +58,7 @@ resetEntryBlock matchables block = do
     liftIO $ writeIORef (block ^. blockPhi) Seq.empty
     iforM_ matchables $ \matchable name ->
         case matchable of
-            MatchableLocal _ _ -> emit (Instruction (Just name) (IConst OperandUndef) [])
+            MatchableLocal size _ -> emit (Instruction (Just name) (IConst (Operand OperandUndef size)) [])
             MatchableArgument size idx -> emit (Instruction (Just name) (Load (MemoryArgument idx) size) [])
   where
     emit instr = liftIO $ modifyIORef' (block ^. blockBody) (instr Seq.<|)
@@ -74,22 +74,23 @@ runInstruction (view instrPayload -> Store to size value) (instrs, matchables)
 runInstruction i@(view instrPayload -> Inc arg size) (instrs, matchables)
     | Just matchable <- getMatchable size arg
     , Just operand <- Map.lookup matchable matchables
-    = ( instrs Seq.|> (i & instrPayload .~ BinOp operand BinOpPlus (OperandInt 1))
+    = ( instrs Seq.|> (i & instrPayload .~ BinOp operand BinOpPlus (Operand (OperandInt 1) (matchableSize matchable)))
         -- assumes this instruction has a name
-      , Map.insert matchable (OperandNamed $ i ^. instrResult . singular _Just) matchables
+      , Map.insert matchable (Operand (OperandNamed $ i ^. instrResult . singular _Just) (matchableSize matchable)) matchables
       )
 runInstruction i@(view instrPayload -> Dec arg size) (instrs, matchables)
     | Just matchable <- getMatchable size arg
     , Just operand <- Map.lookup matchable matchables
-    = ( instrs Seq.|> (i & instrPayload .~ BinOp operand BinOpMinus (OperandInt 1))
+    = ( instrs Seq.|> (i & instrPayload .~ BinOp operand BinOpMinus (Operand (OperandInt 1) (matchableSize matchable)))
         -- assumes this instruction has a name
-      , Map.insert matchable (OperandNamed $ i ^. instrResult . singular _Just) matchables
+      , Map.insert matchable (Operand (OperandNamed $ i ^. instrResult . singular _Just) (matchableSize matchable)) matchables
       )
 runInstruction instr (instrs, matchables) = (instrs Seq.|> instr, matchables)
 
 type Bindings = Map.Map Matchable Operand
 
-data Matchable = MatchableLocal Size Int | MatchableArgument Size Int
+data Matchable = MatchableLocal { matchableSize :: Size, matchableLocal :: Int }
+               | MatchableArgument { matchableSize :: Size, matchableArgument :: Int }
     deriving (Eq, Ord, Show)
 
 matchableName :: Matchable -> Ident

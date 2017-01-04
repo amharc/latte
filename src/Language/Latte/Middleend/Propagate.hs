@@ -45,14 +45,14 @@ runInstruction acc instr = do
             pure acc
   where
     valueOf (IConst op) = Just op
-    valueOf (BinOp (OperandInt 0) BinOpPlus o) = Just o
-    valueOf (BinOp o BinOpPlus (OperandInt 0)) = Just o
-    valueOf (BinOp o BinOpMinus (OperandInt 0)) = Just o
-    valueOf (BinOp (OperandInt 0) BinOpTimes _) = Just $ OperandInt 0
-    valueOf (BinOp _ BinOpTimes (OperandInt 0)) = Just $ OperandInt 0
-    valueOf (BinOp _ BinOpDivide (OperandInt 0)) = Just OperandUndef -- undefined behaviour
-    valueOf (BinOp _ BinOpModulo (OperandInt 0)) = Just OperandUndef -- undefined behaviour
-    valueOf (BinOp (OperandInt lhs) op (OperandInt rhs)) = Just $ OperandInt value
+    valueOf (BinOp (Operand (OperandInt 0) _) BinOpPlus o) = Just o
+    valueOf (BinOp o BinOpPlus (Operand (OperandInt 0) _)) = Just o
+    valueOf (BinOp o BinOpMinus (Operand (OperandInt 0) _)) = Just o
+    valueOf (BinOp (Operand (OperandInt 0) sz) BinOpTimes _) = Just $ Operand (OperandInt 0) sz
+    valueOf (BinOp _ BinOpTimes (Operand (OperandInt 0) sz)) = Just $ Operand (OperandInt 0) sz
+    valueOf (BinOp _ BinOpDivide (Operand (OperandInt 0) _)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
+    valueOf (BinOp _ BinOpModulo (Operand (OperandInt 0) _)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
+    valueOf (BinOp (Operand (OperandInt lhs) sz) op (Operand (OperandInt rhs) _)) = Just $ Operand (OperandInt value) sz
       where
         iverson True = 1
         iverson False = 0
@@ -71,12 +71,12 @@ runInstruction acc instr = do
             BinOpNotEqual -> iverson $ lhs /= rhs
             BinOpAnd -> iverson $ (lhs /= 0) && (rhs /= 0)
             BinOpOr -> iverson $ (lhs /= 0) || (rhs /= 0)
-    valueOf (UnOp UnOpNeg (OperandInt i)) = Just . OperandInt $ -i
-    valueOf (UnOp UnOpNot (OperandInt i)) = Just . OperandInt $ 1 - i
+    valueOf (UnOp UnOpNeg (Operand (OperandInt i) sz)) = Just $ Operand (OperandInt $ -i) sz
+    valueOf (UnOp UnOpNot (Operand (OperandInt i) sz)) = Just $ Operand (OperandInt $ 1 - i) sz
     valueOf _ = Nothing
 
 applySubst :: HasOperands a => Substitution -> a -> a
 applySubst subst = operands %~ mut
   where
-    mut o@(OperandNamed name) = fromMaybe o $ Map.lookup name subst
+    mut o@(Operand (OperandNamed name) _) = fromMaybe o $ Map.lookup name subst
     mut o = o

@@ -73,7 +73,7 @@ step live obj
     | isRemovable obj live = strip $ live
     | otherwise = strip $ stepSimple live obj
   where
-    stepSimple (LiveVariables live) obj = LiveVariables $ foldr Set.insert live (obj ^.. operands . _OperandNamed)
+    stepSimple (LiveVariables live) obj = LiveVariables $ foldr Set.insert live (obj ^.. operands . operandPayload . _OperandNamed)
     strip (LiveVariables live) = LiveVariables $ foldr Set.delete live (obj ^.. names)
 
 isLive :: HasNames a => a -> LiveVariables -> Bool

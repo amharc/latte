@@ -18,6 +18,6 @@ runFunction func = reachableBlocks (func ^. funcEntryBlock) >>= mapM_ runBlock
 
 runBlock :: MonadIO m => Block -> m ()
 runBlock block = liftIO . modifyIORef (block ^. blockEnd) $ \case
-    BlockEndBranchCond (OperandInt 0) _ ifFalse -> BlockEndBranch ifFalse
-    BlockEndBranchCond (OperandInt _) ifTrue _ -> BlockEndBranch ifTrue
+    BlockEndBranchCond (Operand (OperandInt 0) _) _ ifFalse -> BlockEndBranch ifFalse
+    BlockEndBranchCond (Operand (OperandInt _) _) ifTrue _ -> BlockEndBranch ifTrue
     end -> end

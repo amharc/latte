@@ -191,10 +191,10 @@ translateInstr :: MonadState EmitterState m => Instruction -> m ()
 translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (Nothing, Call dest args) -> call dest args
     (Nothing, IIntristic _) -> fail "Ignoring the result of an intristic, probably a bug"
-    (Nothing, Store to size (OperandInt i)) -> do
+    (Nothing, Store to size (Operand (OperandInt i) _)) -> do
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpImmediate i) (Asm.OpMemory mem)
-    (Nothing, Store to size (OperandSize sz)) -> do
+    (Nothing, Store to size (Operand (OperandSize sz) _)) -> do
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpImmediate $ sizeToInt sz) (Asm.OpMemory mem)
     (Nothing, Store to size value) -> do
@@ -233,8 +233,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         writeBack Asm.RAX name
     (Just name, BinOp lhs BinOpModulo rhs) -> do
         divide lhs rhs
-        writeBack
-         Asm.RDX name
+        writeBack Asm.RDX name
     (Just name, BinOp lhs BinOpLess rhs) -> compare name lhs rhs Asm.FlagLess
     (Just name, BinOp lhs BinOpLessEqual rhs) -> compare name lhs rhs Asm.FlagLessEqual
     (Just name, BinOp lhs BinOpGreater rhs) -> compare name lhs rhs Asm.FlagGreater
@@ -247,16 +246,16 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (Just name, UnOp UnOpNot arg) -> do
         reg <- lockInRegister name
         argOp <- getAsmOperand arg 
-        emit $ Asm.Mov Asm.Mult8 argOp (Asm.OpRegister reg)
-        emit $ Asm.Xor Asm.Mult8 (Asm.OpImmediate 1) (Asm.OpRegister reg)
+        emit $ Asm.Mov (sizeToMult $ arg ^. operandSize) argOp (Asm.OpRegister reg)
+        emit $ Asm.Xor (sizeToMult $ arg ^. operandSize) (Asm.OpImmediate 1) (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
 
     (Just name, UnOp UnOpNeg arg) -> do
         reg <- lockInRegister name
         argOp <- getAsmOperand arg 
-        emit $ Asm.Mov Asm.Mult8 argOp (Asm.OpRegister reg)
-        emit $ Asm.Neg Asm.Mult8 (Asm.OpRegister reg)
+        emit $ Asm.Mov (sizeToMult $ arg ^. operandSize) argOp (Asm.OpRegister reg)
+        emit $ Asm.Neg (sizeToMult $ arg ^. operandSize) (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
 
@@ -288,10 +287,10 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         reg <- lockInRegister name
 
         lhsOp <- getAsmOperand lhs
-        emit $ Asm.Mov Asm.Mult8 lhsOp (Asm.OpRegister reg)
+        emit $ Asm.Mov (sizeToMult $ lhs ^. operandSize) lhsOp (Asm.OpRegister reg)
 
         rhsOp <- getAsmOperand rhs
-        emit $ f Asm.Mult8 rhsOp (Asm.OpRegister reg)
+        emit $ f (sizeToMult $ rhs ^. operandSize) rhsOp (Asm.OpRegister reg)
 
         writeBack reg name
         unlockRegisters
@@ -302,14 +301,14 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         emit $ Asm.Cqto
 
         rhsReg <- lockInRegister rhs
-        emit $ Asm.Idiv Asm.Mult8 (Asm.OpRegister rhsReg)
+        emit $ Asm.Idiv (sizeToMult $ rhs ^. operandSize) (Asm.OpRegister rhsReg)
 
         unlockRegisters
 
     compare name lhs rhs flag = do
         lhsReg <- lockInRegister lhs
         rhsReg <- lockInRegister rhs
-        emit $ Asm.Cmp Asm.Mult8 (Asm.OpRegister rhsReg) (Asm.OpRegister lhsReg)
+        emit $ Asm.Cmp (sizeToMult $ lhs ^. operandSize) (Asm.OpRegister rhsReg) (Asm.OpRegister lhsReg)
         unlockRegisters
 
         reg <- lockInRegister name
@@ -339,7 +338,7 @@ translateMemory (MemoryArgument i)
 translateMemory (MemoryOffset base _ Size0) = do
     baseReg <- lockInRegister base
     pure $ Asm.Memory baseReg Nothing 0
-translateMemory (MemoryOffset base (OperandInt index) size) = do
+translateMemory (MemoryOffset base (Operand (OperandInt index) _) size) = do
     baseReg <- lockInRegister base
     pure $ Asm.Memory baseReg Nothing (index * sizeToInt size)
 translateMemory (MemoryOffset base index size) = do
@@ -381,11 +380,13 @@ class GetAsmOperand a where
     getAsmOperand :: MonadState EmitterState m => a -> m Asm.Operand
 
 instance GetAsmOperand Name where
-    getAsmOperand name = use (esPreferredLocations . at name . singular _Just) >>= \case
-        Asm.RSSpill i -> pure . Asm.OpMemory $ memoryOfSpill i
-        Asm.RSRegister reg -> use (esRegisterState . at reg . singular _Just) >>= \case
-            RSMem -> pure . Asm.OpMemory $ memoryOfRegister reg
-            _ -> pure $ Asm.OpRegister reg
+    getAsmOperand name = use (esPreferredLocations . at name) >>= \case
+        Just (Asm.RSSpill i) -> pure . Asm.OpMemory $ memoryOfSpill i
+        Just (Asm.RSRegister reg) -> use (esRegisterState . at reg) >>= \case
+            Just RSMem -> pure . Asm.OpMemory $ memoryOfRegister reg
+            Just _ -> pure $ Asm.OpRegister reg
+            Nothing -> fail "No register state"
+        Nothing -> fail "No preferred location for name"
 
 instance GetAsmOperand Int where
     getAsmOperand = pure . Asm.OpImmediate
@@ -394,6 +395,9 @@ instance GetAsmOperand Size where
     getAsmOperand = pure . Asm.OpImmediate . sizeToInt
 
 instance GetAsmOperand Operand where
+    getAsmOperand operand = getAsmOperand $ operand ^. operandPayload
+
+instance GetAsmOperand OperandPayload where
     getAsmOperand (OperandNamed name) = getAsmOperand name
     getAsmOperand (OperandSize size) = getAsmOperand size
     getAsmOperand (OperandInt i) = getAsmOperand i
@@ -417,9 +421,10 @@ instance LockInRegister Name where
     lockInGivenRegister name reg = use (esPreferredLocations . at name . singular _Just) >>= \case
         Asm.RSSpill i -> do
             emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfSpill i) (Asm.OpRegister reg)
-        Asm.RSRegister reg' -> use (esRegisterState . at reg' . singular _Just) >>= \case
-            RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
-            _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
+        Asm.RSRegister reg' -> use (esRegisterState . at reg') >>= \case
+            Just RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
+            Just _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
+            Nothing -> fail "No register state for register"
 
     lockInRegister name = use (esPreferredLocations . at name . singular _Just) >>= \case
         Asm.RSSpill _ -> do
@@ -440,6 +445,10 @@ instance LockInRegister Int where
     lockInGivenRegister i reg = emit $ Asm.Mov Asm.Mult8 (Asm.OpImmediate i) (Asm.OpRegister reg)
 
 instance LockInRegister Operand where
+    lockInRegister operand = lockInRegister $ operand ^. operandPayload
+    lockInGivenRegister operand = lockInGivenRegister (operand ^. operandPayload)
+
+instance LockInRegister OperandPayload where
     lockInRegister (OperandNamed name) = lockInRegister name
     lockInRegister (OperandSize size) = lockInRegister $ sizeToInt size
     lockInRegister (OperandInt i) = lockInRegister i
@@ -456,7 +465,11 @@ writeBack reg name = use (esPreferredLocations . at name . singular _Just) >>= \
         emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfSpill i)
     Asm.RSRegister reg'
         | reg == reg' -> markRegisterDirty reg
-        | otherwise -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg')
+        | otherwise -> use (esRegisterState . at reg' . singular _Just) >>= \case
+            RSMem -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg')
+            _ -> do
+                markRegisterDirty reg'
+                emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpRegister reg')
 
 saveRegister :: MonadState EmitterState m => Asm.Register -> m ()
 saveRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case
