@@ -79,7 +79,8 @@ opsTable =
       , binary "!=" BinOpNotEqual AssocNone
       ]
     , [ binary "&&" BinOpAnd AssocLeft
-      , binary "||" BinOpOr AssocLeft
+      ]
+    , [ binary "||" BinOpOr AssocLeft
       ]
     ]
   where

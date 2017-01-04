@@ -61,8 +61,8 @@ runInstruction acc instr = do
             BinOpPlus -> lhs + rhs
             BinOpMinus -> lhs - rhs
             BinOpTimes -> lhs * rhs
-            BinOpDivide -> lhs `div` rhs
-            BinOpModulo -> lhs `mod` rhs
+            BinOpDivide -> lhs `quot` rhs
+            BinOpModulo -> lhs `rem` rhs
             BinOpLess -> iverson $ lhs < rhs
             BinOpLessEqual -> iverson $ lhs <= rhs
             BinOpGreater -> iverson $ lhs > rhs
