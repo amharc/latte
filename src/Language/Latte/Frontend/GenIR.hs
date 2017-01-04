@@ -33,6 +33,7 @@ data GIRState = GIRState
     { _girME :: !MiddleEndState
     , _girVariableCnt :: !Int
     , _girVariables :: Map.Map AST.Ident Variable
+    , _girBlockVariables :: Map.Map AST.Ident Variable
     , _girCurrentBlock :: Block
     }
 
@@ -67,16 +68,9 @@ type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m, HasCa
 data Variable = Variable
     { _varType :: !AST.Type
     , _varLoc :: VariableLoc
-    , _varState :: !VarState
-    , _varDefinedIn :: Maybe Block
     }
 
 data VariableLoc = VariableLocal !Int | VariableArgument !Int
-
-data VarState
-    = VarUsable
-    | VarUndefined
-    deriving (Eq, Show)
 
 makeLenses ''GIRState
 makeLenses ''GIREnv
@@ -87,11 +81,6 @@ makeLenses ''Variable
 
 instance HasMiddleEndState GIRState where
     middleEndState = girME
-
-transLocalDecl :: GIRMonad m => AST.LocalDecl -> m ()
-transLocalDecl decl = mapM_ go $ decl ^. AST.localDeclItems
-  where
-    go item = girVariables . at (item ^. AST.obj . AST.localDeclName) . singular _Just . varState .= VarUsable
 
 newBlock :: GIRMonad m => Ident -> m Block
 newBlock name = do
@@ -126,6 +115,7 @@ isReachable = use (girCurrentBlock . blockEnd) >>= liftIO . readIORef >>= \case
 transStmt :: GIRMonad m => AST.Located AST.Stmt -> m ()
 transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
     oldVariables <- use girVariables
+    girBlockVariables .= Map.empty
 
     forM_ stmts $ \case
         AST.Located l (AST.StmtDecl decl) -> addDecl (AST.Located l decl)
@@ -137,18 +127,15 @@ transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
   where
     addDecl decl = forM_ (decl ^. AST.obj ^. AST.localDeclItems) $ \item -> do
         ident <- girVariableCnt <<+= 1
-        block <- use girCurrentBlock
 
-        use (girVariables . at (item ^. AST.obj ^. AST.localDeclName)) >>= \case
-            Just var | var ^. varState == VarUndefined ->
+        use (girBlockVariables . at (item ^. AST.obj ^. AST.localDeclName)) >>= \case
+            Just var ->
                 simpleError item $ "Duplicate definition of variable"
             _ -> pure ()
 
-        girVariables . at (item ^. AST.obj ^. AST.localDeclName) ?= Variable
+        girBlockVariables . at (item ^. AST.obj ^. AST.localDeclName) ?= Variable
             { _varType = decl ^. AST.obj ^. AST.localDeclType
             , _varLoc = VariableLocal ident
-            , _varState = VarUndefined
-            , _varDefinedIn = Just block
             }
 transStmt st@(AST.Located l (AST.StmtAssign lval expr)) = do
     (lvalTy, lvalMem) <- transLval lval
@@ -246,8 +233,6 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
 
     go :: GIRMonad m => AST.Located AST.LocalDeclItem -> m ()
     go locItem@(AST.Located li item) = do
-        girVariables . at (item ^. AST.localDeclName) . singular _Just . varState .= VarUsable
-        var <- use $ girVariables . at (item ^. AST.localDeclName) . singular _Just
         (ty, operand) <- case item ^. AST.localDeclValue of
             Just expr -> transExpr expr
             Nothing -> case expectedType of
@@ -255,6 +240,8 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
                     emptyStr <- emitInstr (Just "emptyString") (GetAddr $ MemoryGlobal "LATC_emptyString") li []
                     pure (AST.TyString, Operand (OperandNamed emptyStr) SizePtr)
                 _ -> pure (expectedType, Operand (OperandInt 0) (sizeOf expectedType))
+        var <- use $ girBlockVariables . at (item ^. AST.localDeclName) . singular _Just
+        girVariables . at (item ^. AST.localDeclName) ?= var
         checkTypeImplicitConv locItem expectedType ty
         void $ emitInstr Nothing
             (Store (memoryOfVariable $ var ^. varLoc) (sizeOf ty) operand)
@@ -409,9 +396,6 @@ transLval lval@(AST.Located l (AST.LvalVar ident)) =
                 this <- flip Operand SizePtr . OperandNamed <$> emitInstr Nothing (Load (MemoryArgument 0) SizePtr) l []
                 pure (field ^. classFieldType, MemoryOffset this (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr)
         Just var -> do
-            case var ^. varState of
-                VarUndefined -> simpleError lval $ "Variable referenced before definition"
-                VarUsable -> pure ()
             pure (var ^. varType, memoryOfVariable $ var ^. varLoc)
 transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
     (tyArr, operandArr) <- transExpr arrExpr
@@ -489,7 +473,6 @@ transFuncDecl mClass locDecl@(AST.Located l decl) = do
 
     local (girCurrentFunction ?~ decl) $ do
         zipWithM_ addArg [argStart..] (decl ^. AST.funcArgs)
-        forM_ (decl ^. AST.funcArgs) markAsUsable
         transStmt $ decl ^. AST.funcBody
         when (decl ^. AST.funcRetType == AST.TyVoid) $
             setEnd BlockEndReturnVoid
@@ -499,22 +482,18 @@ transFuncDecl mClass locDecl@(AST.Located l decl) = do
     addArg idx arg = do
         checkType arg (arg ^. AST.obj . AST.funArgType)
         use (girVariables . at (arg ^. AST.obj . AST.funArgName)) >>= \case
-            Just var | var ^. varState == VarUndefined ->
+            Just var ->
                 simpleError locDecl $ "Duplicate definition of argument:" <+> pPrint (arg ^. AST.obj . AST.funArgName)
             _ -> pure ()
 
         girVariables . at (arg ^. AST.obj . AST.funArgName) ?= Variable
             { _varType = arg ^. AST.obj . AST.funArgType
             , _varLoc = VariableArgument idx
-            , _varState = VarUndefined
-            , _varDefinedIn = Nothing
             }
 
     argStart = case mClass of
         Just _ -> 1
         Nothing -> 0
-
-    markAsUsable arg = girVariables . at (arg ^. AST.obj . AST.funArgName) . singular _Just . varState .= VarUsable
 
 transClassDecl :: GIRMonad m => AST.Located AST.ClassDecl -> m ()
 transClassDecl decl = do
@@ -797,6 +776,7 @@ generateIR program = do
         { _girME = me
         , _girVariableCnt = 0
         , _girVariables = Map.empty
+        , _girBlockVariables = Map.empty
         , _girCurrentBlock = error "Outside"
         }
     put (ret ^. girME)
