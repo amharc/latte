@@ -26,7 +26,6 @@ newtype LiveVariables = LiveVariables { getLiveVariables :: Set.Set Name }
 opt :: (MonadIO m, MonadState s m, HasMiddleEndState s) => m ()
 opt = do
     liveMap <- DAE.runDAE
-    liftIO . putStrLn . render $ pPrint liveMap
     use meFunctions >>= mapM_ (runFunction liveMap)
 
 runFunction :: MonadIO m => Map.Map Block LiveVariables -> FunctionDescriptor -> m ()

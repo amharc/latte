@@ -48,14 +48,22 @@ data Instruction
     | Neg Multiplier Operand
     | Set Flag Operand
     | Movsbq Operand Operand
-    | Test Operand Operand
-    | Cltq
+    | Test Multiplier Operand Operand
+    | Cqto
     | Inc Multiplier Operand
     | Dec Multiplier Operand
     | Jump Ident
     | JumpCond Flag Ident
     | Label Ident
     | GlobalFunc Ident
+    | Section BS.ByteString
+    | Type Ident BS.ByteString
+    | String BS.ByteString
+    | Push Multiplier Operand
+    | Pop Multiplier Operand
+    | Quad Ident
+    | QuadInt Int
+    | Align Int
     | Call Operand
     | Leave
     | Ret

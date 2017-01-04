@@ -2,22 +2,26 @@
 {-# LANGUAGE ExtendedDefaultRules #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-type-defaults #-}
-module Language.Latte.Backend.CodeGen where
+module Language.Latte.Backend.CodeGen (emitState) where
 
 import Control.Lens
 import Control.Monad.IO.Class
 import Control.Monad.State
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS
 import Data.Coerce
+import Data.Foldable
 import Data.IORef
 import qualified Data.Map as Map
 import Data.Maybe
+import Data.Monoid
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
 import qualified Language.Latte.Backend.Asm as Asm
+import Language.Latte.Middleend.Monad
 import Language.Latte.Middleend.IR
 import Language.Latte.Backend.RegAlloc
 
@@ -27,6 +31,8 @@ data EmitterState = EmitterState
     { _esInstructions :: Seq.Seq Asm.Instruction
     , _esRegisterState :: Map.Map Asm.Register RegisterState
     , _esPreferredLocations :: Map.Map Name Asm.RegisterOrSpill
+    , _esNumLocations :: Int
+    , _esSavedRegsStart :: Int
     , _esLockedRegisters :: Set.Set Asm.Register
     }
 
@@ -35,28 +41,71 @@ data RegisterState = RSReg | RSMem | RSRegMem
 makeLenses ''EmitterState
 makePrisms ''RegisterState
 
+emitState :: MonadIO m => MiddleEndState -> m (Seq.Seq Asm.Instruction)
+emitState st = do
+    funcs <- fold <$> itraverse emitFunction (st ^. meFunctions)
+    strgs <- fold <$> itraverse emitString (st ^. meStrings)
+    objs <- fold <$> itraverse emitObject (st ^. meObjects)
+    pure $ funcs <> strgs <> objs
+
 -- |Emits a function
 --
 -- Precondition: valid SSA, mem2reg applied
-emitFunction :: MonadIO m => Ident -> Block -> m (Seq.Seq Asm.Instruction)
-emitFunction functionName entryBlock = do
+emitFunction :: MonadIO m => Ident -> FunctionDescriptor -> m (Seq.Seq Asm.Instruction)
+emitFunction functionName desc = do
     blocks <- reachableBlocks entryBlock
-    preferredLocations <- fmap preprocessLocations <$> allocateRegisters blocks
+    regAlloc <- allocateRegisters blocks
     arguments <- argumentsOfEntryBlock entryBlock
     evalStateT (do
+        emit $ Asm.Section ".text"
+        emit $ Asm.Type (coerce functionName) "@function"
+        emit . Asm.GlobalFunc $ coerce functionName
+        emit . Asm.Label $ coerce functionName
+        prologue
         forM_ blocks translateBlock
         use $ esInstructions
         )
         EmitterState
             { _esInstructions = Seq.empty
             , _esRegisterState = Map.fromList [(reg, RSReg) | reg <- registerOrder]
-            , _esPreferredLocations = preferredLocations
+            , _esPreferredLocations = preprocessLocations <$> regAlloc
+            , _esNumLocations = foldl max 0 regAlloc
+            , _esSavedRegsStart = 16 * ((foldl max (length registerOrder) regAlloc + 1) `div` 2) + 8
             , _esLockedRegisters = Set.empty
             }
   where
     preprocessLocations i
         | Just reg <- registerOrder ^? ix i = Asm.RSRegister reg
         | otherwise = Asm.RSSpill (i - length registerOrder)
+
+    entryBlock = desc ^. funcEntryBlock
+
+emitString :: MonadIO m => Ident -> BS.ByteString -> m (Seq.Seq Asm.Instruction)
+emitString ident str = pure
+    [ Asm.Section ".rodata"
+    , Asm.Align 8
+    , Asm.Type (coerce ident) "@object"
+    , Asm.Label (coerce ident)
+    , Asm.String str
+    ]
+
+emitObject :: MonadIO m => Ident -> Object -> m (Seq.Seq Asm.Instruction)
+emitObject ident obj = pure $ start Seq.>< end
+  where
+    start = 
+        [ Asm.Section ".rodata"
+        , Asm.Align 8
+        , Asm.Type (coerce ident) "@object"
+        , Asm.Label (coerce ident)
+        ]
+    end = flip foldMap (obj ^. objectFields) $ \field ->
+        case field ^. objectFieldData of
+            ObjectFieldInt i ->
+                [Asm.QuadInt i]
+            ObjectFieldNull ->
+                [Asm.QuadInt 0]
+            ObjectFieldRef ref ->
+                [Asm.Quad (coerce ref)]
 
 argumentsOfEntryBlock :: MonadIO m => Block -> m Int
 argumentsOfEntryBlock entryBlock = do
@@ -70,55 +119,78 @@ translateBlock :: (MonadIO m, MonadState EmitterState m) => Block -> m ()
 translateBlock block = do
     emit . Asm.Label $ blockIdent block
 
+    esRegisterState . traverse .= RSReg
+
     body <- liftIO . readIORef $ block ^. blockBody
     forM_ body translateInstr
 
     liftIO (readIORef $ block ^. blockEnd) >>= \case
         BlockEndNone -> pure ()
         BlockEndReturn arg -> do
-            lockInGivenRegister arg Asm.RAX
-            emit Asm.Leave
-            emit Asm.Ret
+            safeLockInGivenRegister arg Asm.RAX
+            epilogue
         BlockEndReturnVoid -> do
-            emit Asm.Leave
-            emit Asm.Ret
+            epilogue
         BlockEndBranch target -> do
             forM_ registerOrder restoreRegister
             regs <- use esRegisterState
 
             emit $ Asm.Jump (phiBlockIdent block target)
-            linkTo target regs
+            linkTo target
 
             esRegisterState .= regs
         BlockEndBranchCond cond ifTrue ifFalse -> do
             op <- getAsmOperand cond
-            emit $ Asm.Test op (Asm.OpImmediate 1)
+            emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
+            forM_ registerOrder restoreRegister
             emit $ Asm.JumpCond Asm.FlagEqual (phiBlockIdent block ifFalse)
             emit $ Asm.Jump (phiBlockIdent block ifTrue)
 
-            forM_ registerOrder restoreRegister
             regs <- use esRegisterState
 
-            linkTo ifTrue regs
+            linkTo ifTrue
             esRegisterState .= regs
 
-            linkTo ifFalse regs
+            linkTo ifFalse
             esRegisterState .= regs
 
     unlockRegisters
   where
-    linkTo target regs = pure ()
-    {-
-        emit . AsmLabel $ phiBlockIdent block target
-        phis <- liftIO . readIORef $ block ^. blockPhi
+    linkTo target = do
+        emit . Asm.Label $ phiBlockIdent block target
+        phis <- liftIO . readIORef $ target ^. blockPhi
         forM_ phis $ \phi ->
             forM_ (phi ^. phiBranches) $ \branch ->        
-        emit . AsmJump $ blockIdent target -}
+                when (branch ^. phiFrom == block) $ do
+                    reg <- lockInRegister $ phi ^. name
+                    op <- getAsmOperand (branch ^. phiValue)
+                    emit $ Asm.Mov Asm.Mult8 op (Asm.OpRegister reg)
+                    writeBack reg (phi ^. name)
+                    unlockRegisters
+        forM_ registerOrder restoreRegister
+        emit . Asm.Jump $ blockIdent target
+
+prologue :: MonadState EmitterState m => m ()
+prologue = do
+    emit $ Asm.Push Asm.Mult8 (Asm.OpRegister Asm.RBP)
+    emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister Asm.RSP) (Asm.OpRegister Asm.RBP)
+    srs <- use esSavedRegsStart
+    emit $ Asm.Sub Asm.Mult8 (Asm.OpImmediate srs) (Asm.OpRegister Asm.RSP)
+    forM_ savedRegs $ emit . Asm.Push Asm.Mult8 . Asm.OpRegister
+
+epilogue :: MonadState EmitterState m => m ()
+epilogue = do
+    forM_ (reverse savedRegs) $ emit . Asm.Pop Asm.Mult8 . Asm.OpRegister
+    emit Asm.Leave
+    emit Asm.Ret
+
+savedRegs :: [Asm.Register]
+savedRegs = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9, Asm.RBX, Asm.R12, Asm.R13, Asm.R14, Asm.R15]
 
 translateInstr :: MonadState EmitterState m => Instruction -> m ()
 translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
-    (Nothing, Call _ _) -> undefined
-    (Nothing, IIntristic _) -> undefined
+    (Nothing, Call dest args) -> call dest args
+    (Nothing, IIntristic _) -> fail "Ignoring the result of an intristic, probably a bug"
     (Nothing, Store to size (OperandInt i)) -> do
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpImmediate i) (Asm.OpMemory mem)
@@ -130,7 +202,21 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpRegister reg) (Asm.OpMemory mem)
         unlockRegisters
-    (Nothing, _) -> pure ()
+
+    (Just name, Call dest args) -> do
+        call dest args
+        writeBack Asm.RAX name
+
+    (Just name, IIntristic (IntristicAlloc length ty)) -> do
+        -- TODO types
+        call (MemoryGlobal "alloc") [length]
+        writeBack Asm.RAX name
+
+    (Just _name, IIntristic (IntristicClone _memory)) -> fail "clone unimplemented" 
+
+    (Just name, IIntristic (IntristicConcat lhs rhs)) -> do
+        call (MemoryGlobal "concat") [lhs, rhs]
+        writeBack Asm.RAX name
 
     (Just name, Load from size) -> do
         reg <- lockInRegister name
@@ -181,11 +267,11 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         writeBack reg name
         unlockRegisters
 
-    (Just name, Inc var size) -> do
+    (_, Inc var size) -> do
         mem <- translateMemory var
         emit $ Asm.Inc (sizeToMult size) (Asm.OpMemory mem)
 
-    (Just name, Dec var size) -> do
+    (_, Dec var size) -> do
         mem <- translateMemory var
         emit $ Asm.Dec (sizeToMult size) (Asm.OpMemory mem)
 
@@ -196,7 +282,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         writeBack reg name
         unlockRegisters
 
-    (Just name, _) -> fail "Invalid instruction"
+    (_, _) -> fail "Invalid instruction"
   where
     simpleBinOp name lhs rhs f = do
         reg <- lockInRegister name
@@ -211,19 +297,19 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         unlockRegisters
 
     divide lhs rhs = do
-        lockInGivenRegister lhs Asm.RAX 
-        emit $ Asm.Cltq
         lockRegister Asm.RDX
+        safeLockInGivenRegister lhs Asm.RAX 
+        emit $ Asm.Cqto
 
-        rhsOp <- getAsmOperand rhs
-        emit $ Asm.Idiv Asm.Mult8 rhsOp
+        rhsReg <- lockInRegister rhs
+        emit $ Asm.Idiv Asm.Mult8 (Asm.OpRegister rhsReg)
 
         unlockRegisters
 
     compare name lhs rhs flag = do
-        lhsOp <- getAsmOperand lhs
-        rhsOp <- getAsmOperand rhs
-        emit $ Asm.Cmp Asm.Mult8 rhsOp lhsOp
+        lhsReg <- lockInRegister lhs
+        rhsReg <- lockInRegister rhs
+        emit $ Asm.Cmp Asm.Mult8 (Asm.OpRegister rhsReg) (Asm.OpRegister lhsReg)
         unlockRegisters
 
         reg <- lockInRegister name
@@ -232,12 +318,23 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         writeBack reg name
         unlockRegisters
 
+    call target args = do
+        mapM_ clobberRegister ([Asm.RAX, Asm.RCX, Asm.RDX, Asm.RSI, Asm.RDI, Asm.R8, Asm.R9, Asm.R10, Asm.R11] :: [Asm.Register])
+        zipWithM_ safeLockInGivenRegister args [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
+        op <- translateMemory target
+        lockRegister Asm.RAX
+        emit $ Asm.Call (Asm.OpMemory op)
+        unlockRegisters
+
 translateMemory :: MonadState EmitterState m => Memory -> m Asm.Memory
 translateMemory (MemoryLocal _) = fail "No locals expected here"
 translateMemory (MemoryArgument i)
-    | Just reg <- regs ^? ix i = pure $ memoryOfRegister reg
+    | i < 6 = do
+        srs <- use esSavedRegsStart
+        pure $ Asm.Memory Asm.RBP Nothing (- srs - i * 8 - 8)
     | otherwise = pure $ Asm.Memory Asm.RBP Nothing $ (2 + i - length regs) * 8
   where
+    regs :: [Asm.Register]
     regs = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
 translateMemory (MemoryOffset base _ Size0) = do
     baseReg <- lockInRegister base
@@ -268,10 +365,10 @@ registerOrder =
 memoryOfRegister :: Asm.Register -> Asm.Memory
 memoryOfRegister = (map Map.!)
   where
-    map = Map.fromList $ [(reg, Asm.Memory Asm.RBP Nothing (-8 * i)) | (reg, i) <- zip registerOrder [2..]]
+    map = Map.fromList $ [(reg, Asm.Memory Asm.RBP Nothing (-8 * i - 8)) | (reg, i) <- zip registerOrder [2..]]
 
 memoryOfSpill :: Int -> Asm.Memory
-memoryOfSpill i = Asm.Memory Asm.RBP Nothing (-8 * (i + length registerOrder))
+memoryOfSpill i = Asm.Memory Asm.RBP Nothing (-8 * (i + length registerOrder) - 8)
 
 blockIdent :: Block -> Asm.Ident
 blockIdent block = coerce . nameToIdent $ block ^. blockName
@@ -305,6 +402,11 @@ instance GetAsmOperand Operand where
 class LockInRegister a where
     lockInGivenRegister :: MonadState EmitterState m => a -> Asm.Register -> m ()
 
+    safeLockInGivenRegister :: MonadState EmitterState m => a -> Asm.Register -> m ()
+    safeLockInGivenRegister x reg = do
+        saveRegister reg
+        lockInGivenRegister x reg
+
     lockInRegister :: MonadState EmitterState m => a -> m Asm.Register
     lockInRegister x = do
         reg <- evictLockRegister
@@ -315,8 +417,9 @@ instance LockInRegister Name where
     lockInGivenRegister name reg = use (esPreferredLocations . at name . singular _Just) >>= \case
         Asm.RSSpill i -> do
             emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfSpill i) (Asm.OpRegister reg)
-        Asm.RSRegister reg' ->
-            emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
+        Asm.RSRegister reg' -> use (esRegisterState . at reg' . singular _Just) >>= \case
+            RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
+            _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
 
     lockInRegister name = use (esPreferredLocations . at name . singular _Just) >>= \case
         Asm.RSSpill _ -> do
@@ -351,8 +454,9 @@ writeBack :: MonadState EmitterState m => Asm.Register -> Name -> m ()
 writeBack reg name = use (esPreferredLocations . at name . singular _Just) >>= \case
     Asm.RSSpill i -> 
         emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfSpill i)
-    Asm.RSRegister reg' -> unless (reg == reg') $
-        emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg')
+    Asm.RSRegister reg'
+        | reg == reg' -> markRegisterDirty reg
+        | otherwise -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg')
 
 saveRegister :: MonadState EmitterState m => Asm.Register -> m ()
 saveRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case
@@ -361,6 +465,11 @@ saveRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case
     RSReg -> do
         emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg)
         esRegisterState . at reg ?= RSRegMem
+
+clobberRegister :: MonadState EmitterState m => Asm.Register -> m ()
+clobberRegister reg = do
+    saveRegister reg
+    esRegisterState . at reg ?= RSMem
 
 restoreRegister :: MonadState EmitterState m => Asm.Register -> m ()
 restoreRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case

@@ -48,12 +48,13 @@ interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty
     update :: (MonadState InterferenceGraph m, HasNames a)
         => (DCE.LiveVariables -> a -> DCE.LiveVariables)
         -> a -> DCE.LiveVariables -> m DCE.LiveVariables
-    update step obj live@(DCE.LiveVariables liveSet) = do
+    update step obj live = do
+        let live'@(DCE.LiveVariables liveBefore) = step live obj
         obj & forMOf_ names $ \name ->
-            forM_ liveSet $ \other -> do
+            forM_ liveBefore $ \other -> do
                 addDirected name other
                 addDirected other name
-        pure $ step live obj
+        pure $ live'
     
     addDirected a b = getInterferenceGraph . at a . non Set.empty . contains b .= True
 

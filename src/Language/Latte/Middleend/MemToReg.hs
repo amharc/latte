@@ -34,7 +34,7 @@ runFunction desc = do
     preds <- predecessors blocks
     let phiBranches block = Map.fromList
             [ ( matchable
-              , [PhiBranch pred (values Map.! matchable) | pred <- preds Map.! block | values <- endValues]
+              , [PhiBranch pred (values Map.! matchable) | pred <- blocks | values <- endValues]
               )
             | matchable <- matchables
             ]

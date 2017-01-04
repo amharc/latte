@@ -15,14 +15,12 @@ import Data.IORef
 import qualified Data.Map as Map
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
-import Text.PrettyPrint
-import Text.PrettyPrint.HughesPJClass
 
 data DAEDirection = DAEForward | DAEBackward
 
 data DAEPostProcess = DAEMerge | DAENormal
 
-class (Monoid a, Eq a, Pretty a) => DAE a where
+class (Monoid a, Eq a) => DAE a where
     direction :: DAEDirection
 
     postProcess :: DAEPostProcess
@@ -64,14 +62,11 @@ iteration preds order prev = liftIO $ foldlM addBlock prev order
         pure $ Map.insert block value prev
 
     stepBlock prev block = do
-        putStrLn . render $ "preds of " <+> pPrint block <> ":" <+> pPrintList prettyNormal (preds Map.! block)
         phis <- readIORef $ block ^. blockPhi
         body <- readIORef $ block ^. blockBody
         end <- readIORef $ block ^. blockEnd
 
         let init = foldMap (prev Map.!) (preds Map.! block)
-
-        putStrLn . render $ "init of" <+> pPrint block <> ":" <+> pPrint init
 
         let ret = case direction @a of
                 DAEForward ->
@@ -83,7 +78,6 @@ iteration preds order prev = liftIO $ foldlM addBlock prev order
                          & flip (foldr (flip stepInstruction)) body
                          & flip (foldr (flip stepPhi)) phis
 
-        putStrLn . render $ "result of" <+> pPrint block <> ":" <+> pPrint ret
         pure ret
 
 post :: forall a. DAE a => Map.Map Block [Block] -> Map.Map Block a -> Map.Map Block a
