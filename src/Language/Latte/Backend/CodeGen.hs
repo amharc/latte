@@ -23,6 +23,8 @@ import qualified Data.Sequence as Seq
 import qualified Language.Latte.Backend.Asm as Asm
 import Language.Latte.Middleend.Monad
 import Language.Latte.Middleend.IR
+import qualified Language.Latte.Middleend.DataflowAnalysisEngine as DAE
+import qualified Language.Latte.Middleend.DeadCodeElimination as LV
 import Language.Latte.Backend.RegAlloc
 
 default (Int)
@@ -34,9 +36,10 @@ data EmitterState = EmitterState
     , _esNumLocations :: Int
     , _esSavedRegsStart :: Int
     , _esLockedRegisters :: Set.Set Asm.Register
+    , _esLiveAfterPhi :: Map.Map Block (Set.Set Name)
     }
 
-data RegisterState = RSReg | RSMem | RSRegMem
+data RegisterState = RSReg | RSMem | RSRegMem | RSNone
 
 makeLenses ''EmitterState
 makePrisms ''RegisterState
@@ -55,6 +58,7 @@ emitFunction :: MonadIO m => Ident -> FunctionDescriptor -> m (Seq.Seq Asm.Instr
 emitFunction functionName desc = do
     blocks <- reachableBlocks entryBlock
     regAlloc <- allocateRegisters blocks
+    liveAfterPhi <- calcLiveAfterPhi blocks
     arguments <- argumentsOfEntryBlock entryBlock
     evalStateT (do
         emit $ Asm.Section ".text"
@@ -72,6 +76,7 @@ emitFunction functionName desc = do
             , _esNumLocations = foldl max 0 regAlloc
             , _esSavedRegsStart = 16 * ((foldl max (length registerOrder) regAlloc + 1) `div` 2) + 8
             , _esLockedRegisters = Set.empty
+            , _esLiveAfterPhi = liveAfterPhi
             }
   where
     preprocessLocations i
@@ -79,6 +84,15 @@ emitFunction functionName desc = do
         | otherwise = Asm.RSSpill (i - length registerOrder)
 
     entryBlock = desc ^. funcEntryBlock
+
+calcLiveAfterPhi :: MonadIO m => [Block] -> m (Map.Map Block (Set.Set Name))
+calcLiveAfterPhi blocks = DAE.runDAEBlocks blocks >>= imapM go
+  where
+    go block liveAfter = liftIO $ do
+        end <- readIORef $ block ^. blockEnd
+        body <- readIORef $ block ^. blockBody
+
+        pure . LV.getLiveVariables $ foldr (flip DAE.stepInstruction) (DAE.stepEnd liveAfter end) body
 
 emitString :: MonadIO m => Ident -> BS.ByteString -> m (Seq.Seq Asm.Instruction)
 emitString ident str = pure
@@ -119,7 +133,8 @@ translateBlock :: (MonadIO m, MonadState EmitterState m) => Block -> m ()
 translateBlock block = do
     emit . Asm.Label $ blockIdent block
 
-    esRegisterState . traverse .= RSReg
+    esRegisterState . traverse .= RSNone
+    use (esLiveAfterPhi . at block . singular _Just) >>= mapM_ prepareVar
 
     body <- liftIO . readIORef $ block ^. blockBody
     forM_ body translateInstr
@@ -132,7 +147,6 @@ translateBlock block = do
         BlockEndReturnVoid -> do
             epilogue
         BlockEndBranch target -> do
-            forM_ registerOrder restoreRegister
             regs <- use esRegisterState
 
             emit $ Asm.Jump (phiBlockIdent block target)
@@ -142,7 +156,6 @@ translateBlock block = do
         BlockEndBranchCond cond ifTrue ifFalse -> do
             op <- getAsmOperand cond
             emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
-            forM_ registerOrder restoreRegister
             emit $ Asm.JumpCond Asm.FlagEqual (phiBlockIdent block ifFalse)
             emit $ Asm.Jump (phiBlockIdent block ifTrue)
 
@@ -167,8 +180,17 @@ translateBlock block = do
                     emit $ Asm.Mov Asm.Mult8 op (Asm.OpRegister reg)
                     writeBack reg (phi ^. name)
                     unlockRegisters
-        forM_ registerOrder restoreRegister
+
+        use (esLiveAfterPhi . at target . singular _Just) >>= mapM_ restoreVar
         emit . Asm.Jump $ blockIdent target
+
+    restoreVar var = use (esPreferredLocations . at var . singular _Just) >>= \case
+        Asm.RSRegister reg -> restoreRegister reg
+        _ -> pure ()
+
+    prepareVar var = use (esPreferredLocations . at var . singular _Just) >>= \case
+        Asm.RSRegister reg -> esRegisterState . at reg ?= RSReg
+        _ -> pure ()
 
 prologue :: MonadState EmitterState m => m ()
 prologue = do
@@ -359,8 +381,8 @@ translateMemory MemoryUndef = fail "Undefined memory"
 
 registerOrder :: [Asm.Register]
 registerOrder =
-    [ Asm.RDI, Asm.RSI, Asm.R8, Asm.R9, Asm.R10, Asm.R11, Asm.RAX
-    , Asm.RCX, Asm.RDX, Asm.RBX, Asm.R12, Asm.R13, Asm.R14, Asm.R15
+    [ Asm.R12, Asm.R13, Asm.R14, Asm.R15, Asm.RBX, Asm.RAX, Asm.RDX
+    , Asm.RCX, Asm.RDI, Asm.RSI, Asm.R8, Asm.R9, Asm.R10, Asm.R11
     ]
 
 memoryOfRegister :: Asm.Register -> Asm.Memory
@@ -477,6 +499,7 @@ saveRegister :: MonadState EmitterState m => Asm.Register -> m ()
 saveRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case
     RSRegMem -> pure ()
     RSMem -> pure ()
+    RSNone -> pure ()
     RSReg -> do
         emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg)
         esRegisterState . at reg ?= RSRegMem
@@ -490,6 +513,7 @@ restoreRegister :: MonadState EmitterState m => Asm.Register -> m ()
 restoreRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case
     RSRegMem -> pure ()
     RSReg -> pure ()
+    RSNone -> pure ()
     RSMem -> do
         emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg) (Asm.OpRegister reg)
         esRegisterState . at reg ?= RSRegMem
