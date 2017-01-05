@@ -221,6 +221,7 @@ transStmt st@(AST.Located l (AST.StmtFor ty idx array body)) = transStmt $
                     (arrLoc . AST.ExprLval $ AST.LvalVar "$idx"))
             ]
         , body
+        , arrLoc . AST.StmtInc . arrLoc $ AST.LvalVar "$idx"
         ]
 
     arrLoc = AST.Located (array ^. AST.loc)
@@ -367,6 +368,7 @@ transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
     lenOperand <- transExprTypeEqual AST.TyInt lenExpr
     sizeOperand <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$> emitInstr Nothing (BinOp lenOperand BinOpTimes (Operand (OperandSize $ sizeOf ty) (sizeOf AST.TyInt))) l []
     val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOperand objectType)) l [InstrComment $ pPrint ex]
+    _ <- emitInstr Nothing (Store (MemoryOffset (Operand (OperandNamed val) SizePtr) (Operand (OperandInt 0) Size32) SizePtr) Size32 lenOperand) l []
     pure (AST.TyArray ty, Operand (OperandNamed val) SizePtr)
   where
     objectType = case ty of
@@ -418,9 +420,10 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
                     pure (AST.TyInt, MemoryLocal 0)
                 Just field ->
                     pure (field ^. classFieldType, MemoryOffset operandObj (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr)
-        AST.TyString -> do
+        {-AST.TyString -> do
             unless (field == "length") . simpleError lval $ "string has no field" <+> pPrint field
             pure $ lengthField operandObj
+        -}
         AST.TyArray _ -> do
             unless (field == "length") . simpleError lval $ pPrint tyObj <+> "has no field" <+> pPrint field
             pure $ lengthField operandObj
