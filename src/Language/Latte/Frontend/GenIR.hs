@@ -115,15 +115,18 @@ isReachable = use (girCurrentBlock . blockEnd) >>= liftIO . readIORef >>= \case
 transStmt :: GIRMonad m => AST.Located AST.Stmt -> m ()
 transStmt (AST.Located _ (AST.StmtBlock stmts)) = do
     oldVariables <- use girVariables
+    oldBlockVariables <- use girBlockVariables
     girBlockVariables .= Map.empty
 
     forM_ stmts $ \case
-        AST.Located l (AST.StmtDecl decl) -> addDecl (AST.Located l decl)
+        AST.Located l (AST.StmtDecl decl) -> do
+            addDecl (AST.Located l decl)
         _ -> pure ()
 
     forM_ stmts transStmt
 
     girVariables .= oldVariables
+    girBlockVariables .= oldBlockVariables
   where
     addDecl decl = forM_ (decl ^. AST.obj ^. AST.localDeclItems) $ \item -> do
         ident <- girVariableCnt <<+= 1
@@ -241,7 +244,7 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
                     emptyStr <- emitInstr (Just "emptyString") (GetAddr $ MemoryGlobal "LATC_emptyString") li []
                     pure (AST.TyString, Operand (OperandNamed emptyStr) SizePtr)
                 _ -> pure (expectedType, Operand (OperandInt 0) (sizeOf expectedType))
-        var <- use $ girBlockVariables . at (item ^. AST.localDeclName) . singular _Just
+        Just var <- use $ girBlockVariables . at (item ^. AST.localDeclName)
         girVariables . at (item ^. AST.localDeclName) ?= var
         checkTypeImplicitConv locItem expectedType ty
         void $ emitInstr Nothing
@@ -302,7 +305,7 @@ transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpAnd rhs)) = do
         pure operandRhs
 
     switchToBlock endBlock
-    value <- emitPhi (Just "and") [PhiBranch block operandLhs, PhiBranch midBlock operandRhs]
+    value <- emitPhi (Just "and") [PhiBranch block (Operand (OperandInt 0) (sizeOf AST.TyBool)), PhiBranch midBlock operandRhs]
     pure (AST.TyBool, Operand (OperandNamed value) (sizeOf AST.TyBool))
 transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpOr rhs)) = do
     endBlock <- newBlock "orEnd"
@@ -318,7 +321,7 @@ transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpOr rhs)) = do
         pure operandRhs
 
     switchToBlock endBlock
-    value <- emitPhi (Just "or") [PhiBranch block operandLhs, PhiBranch midBlock operandRhs]
+    value <- emitPhi (Just "or") [PhiBranch block (Operand (OperandInt 1) (sizeOf AST.TyBool)), PhiBranch midBlock operandRhs]
     pure (AST.TyBool, Operand (OperandNamed value) (sizeOf AST.TyBool))
 transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
     (tyLhs, operandLhs) <- transExpr lhs
@@ -367,7 +370,8 @@ transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
     checkType ex ty
     lenOperand <- transExprTypeEqual AST.TyInt lenExpr
     sizeOperand <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$> emitInstr Nothing (BinOp lenOperand BinOpTimes (Operand (OperandSize $ sizeOf ty) (sizeOf AST.TyInt))) l []
-    val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOperand objectType)) l [InstrComment $ pPrint ex]
+    sizeOpWithField <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$> emitInstr Nothing (BinOp sizeOperand BinOpPlus (Operand (OperandSize Size32) (sizeOf AST.TyInt))) l []
+    val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOpWithField objectType)) l [InstrComment $ pPrint ex]
     _ <- emitInstr Nothing (Store (MemoryOffset (Operand (OperandNamed val) SizePtr) (Operand (OperandInt 0) Size32) SizePtr) Size32 lenOperand) l []
     pure (AST.TyArray ty, Operand (OperandNamed val) SizePtr)
   where
@@ -405,7 +409,7 @@ transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
     case tyArr of
         AST.TyArray ty -> do
             arrData <- flip Operand SizePtr . OperandNamed <$> emitInstr Nothing
-                (GetAddr $ MemoryOffset operandArr (Operand (OperandInt 1) Size32) SizePtr) l [InstrComment "skip length field"]
+                (GetAddr $ MemoryOffset operandArr (Operand (OperandInt 1) Size32) Size32) l [InstrComment "skip length field"]
             pure (ty, MemoryOffset arrData operandIdx (sizeOf ty))
         ty -> do
             simpleError lval $ "Not an array: " <+> pPrint ty
@@ -500,7 +504,7 @@ transFuncDecl mClass locDecl@(AST.Located l decl) = do
 
 transClassDecl :: GIRMonad m => AST.Located AST.ClassDecl -> m ()
 transClassDecl decl = do
-    info <- view $ girClasses . at (decl ^. AST.obj . AST.className) . singular _Just
+    Just info <- view $ girClasses . at (decl ^. AST.obj . AST.className)
     local (girCurrentClass ?~ info) $ forM_ (decl ^. AST.obj . AST.classMembers) $ \case
         l@(AST.Located _ (AST.ClassMemberField field)) ->
             checkType l (field ^. AST.classFieldType)
@@ -629,7 +633,7 @@ transProgram (AST.Program prog) = do
                 pure (acc, objVtable)
             | Just baseMethod <- Map.lookup name baseMethods = do
                 checkOverride (baseMethod ^. funcInfoDecl) method
-                let pos = baseMethod ^. funcInfoVtablePos . singular _Just
+                let Just pos = baseMethod ^. funcInfoVtablePos
                     objVtable' = Seq.update pos mangled objVtable
                 pure (Map.insert name (FuncInfo method (Just pos)) acc, objVtable')
             | otherwise =

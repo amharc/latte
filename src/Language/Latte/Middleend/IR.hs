@@ -472,7 +472,7 @@ successors :: MonadIO m => Block -> m [Block]
 successors block = liftIO $ readIORef (block ^. blockEnd) >>= \case
     BlockEndNone -> pure []
     BlockEndBranch target -> pure [target]
-    BlockEndBranchCond _ ifTrue ifFalse -> pure [ifTrue, ifFalse]
+    BlockEndBranchCond _ ifTrue ifFalse -> pure [ifFalse, ifTrue]
     BlockEndReturn _ -> pure []
     BlockEndReturnVoid -> pure []
 

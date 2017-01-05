@@ -32,3 +32,7 @@ runFunction func = liftIO $ do
             succBody <- readIORef $ succ ^. blockBody
             modifyIORef (block ^. blockBody) (Seq.>< succBody)
             readIORef (succ ^. blockEnd) >>= writeIORef (block ^. blockEnd)
+        successors succ >>= mapM_ (fixSuccessor block succ)
+
+    fixSuccessor newPred oldPred block = liftIO . modifyIORef (block ^. blockPhi) $
+        traverse . phiBranches . traverse . phiFrom . filtered (== oldPred) .~ newPred

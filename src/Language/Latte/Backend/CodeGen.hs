@@ -573,10 +573,10 @@ lockRegister reg = do
 
 sizeToInt :: Size -> Int
 sizeToInt Size0 = 0
-sizeToInt Size8 = 8
-sizeToInt Size32 = 32
-sizeToInt Size64 = 64
-sizeToInt SizePtr = 64
+sizeToInt Size8 = 1
+sizeToInt Size32 = 4
+sizeToInt Size64 = 8
+sizeToInt SizePtr = 8
 
 sizeToMult :: Size -> Asm.Multiplier
 sizeToMult Size0 = Asm.Mult1
