@@ -151,27 +151,31 @@ translateBlock block = do
 
     body <- liftIO . readIORef $ block ^. blockBody
     forM_ body translateInstr
-    use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
 
     liftIO (readIORef $ block ^. blockEnd) >>= \case
         BlockEndNone -> pure ()
         BlockEndReturn arg -> do
+            use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
             safeLockInGivenRegister arg Asm.RAX
             epilogue
         BlockEndReturnVoid -> do
+            use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
             epilogue
         BlockEndBranch target -> do
             regs <- use esRegisterState
 
+            use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
             emit $ Asm.Jump (phiBlockIdent block target)
             linkTo target
 
             esRegisterState .= regs
         BlockEndBranchCond cond ifTrue ifFalse -> do
             use esInFlags >>= \case
-                Just (flag, name) | OperandNamed name == cond ^. operandPayload ->
+                Just (flag, name) | OperandNamed name == cond ^. operandPayload -> do
+                    use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
                     emit $ Asm.JumpCond flag (phiBlockIdent block ifTrue)
                 _ -> do
+                    use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
                     op <- getAsmOperand cond
                     emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
                     emit $ Asm.JumpCond Asm.FlagNotEqual (phiBlockIdent block ifTrue)
