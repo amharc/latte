@@ -159,7 +159,8 @@ instance Trans Instruction where
     trans (JumpCond flag ident) = sbs "\tj" <> trans flag <> sbs " " <> trans ident
     trans (Jump ident) = sbs "\tjmp " <> trans ident
     trans (GlobalFunc ident) = sbs ".global " <> trans ident
-    trans (Call op) = sbs "\tcall " <> trans op
+    trans (Call (OpMemory (Global ident))) = sbs "\tcall " <> trans ident
+    trans (Call op) = sbs "\tcall *" <> trans op
     trans Leave = sbs "\tleave"
     trans Ret = sbs "\tret"
     trans (Label ident) = trans ident <> sbs ":"

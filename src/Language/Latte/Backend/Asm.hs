@@ -9,14 +9,14 @@ import Data.Data
 import qualified Data.Set as Set
 import Data.ByteString.Char8 as BS
 
-data Register = RSP | RBP | RBX | RCX | RSI | RDI | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | RDX | RAX
+data Register = RSP | RBP | RBX | RCX | RSI | RDI | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | RDX | RAX | RFLAGS
     deriving (Eq, Show, Ord, Enum, Bounded, Data, Typeable)
 
 data RegisterOrSpill = RSRegister Register | RSSpill Int
     deriving (Eq, Show, Ord, Data, Typeable)
 
 data Operand = OpRegister Register | OpMemory Memory | OpImmediate Int
-    deriving (Eq, Data, Typeable)
+    deriving (Eq, Show, Data, Typeable)
 
 data Memory
     = Memory
@@ -25,12 +25,13 @@ data Memory
         , _memDisplacement :: {-# UNPACK #-} Int
         }
     | Global Ident
-    deriving (Eq, Data, Typeable)
+    deriving (Eq, Show, Data, Typeable)
 
 data Multiplier = Mult1 | Mult2 | Mult4 | Mult8
     deriving (Eq, Ord, Show, Data, Typeable)
 
 data Flag = FlagEqual | FlagNotEqual | FlagLess | FlagLessEqual | FlagGreater | FlagGreaterEqual
+    deriving (Eq, Show, Data, Typeable)
 
 newtype Ident = Ident { getIdent :: BS.ByteString }
     deriving (Eq, Ord, Show, Data, Typeable)
@@ -72,6 +73,7 @@ data Instruction
     | AnnotateLiveStop
     | Leave
     | Ret
+    deriving (Eq, Show, Data, Typeable)
 
 makeLenses ''Memory
 makePrisms ''RegisterOrSpill

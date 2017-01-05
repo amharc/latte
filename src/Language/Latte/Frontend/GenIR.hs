@@ -302,34 +302,36 @@ transExpr ex@(AST.Located l (AST.ExprUnOp AST.UnOpNeg arg)) = do
 transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpAnd rhs)) = do
     endBlock <- newBlock "andEnd"
     midBlock <- newBlock "andMid"
-    block <- use girCurrentBlock
 
     operandLhs <- transExprTypeEqual AST.TyBool lhs
+    block <- use girCurrentBlock
     setEnd $ BlockEndBranchCond operandLhs midBlock endBlock
 
-    operandRhs <- inBlock midBlock $ do
+    (midBlock', operandRhs) <- inBlock midBlock $ do
         operandRhs <- transExprTypeEqual AST.TyBool rhs
         setEnd $ BlockEndBranch endBlock
-        pure operandRhs
+        midBlock' <- use girCurrentBlock
+        pure (midBlock', operandRhs)
 
     switchToBlock endBlock
-    value <- emitPhi (Just "and") [PhiBranch block (Operand (OperandInt 0) (sizeOf AST.TyBool)), PhiBranch midBlock operandRhs]
+    value <- emitPhi (Just "and") [PhiBranch block (Operand (OperandInt 0) (sizeOf AST.TyBool)), PhiBranch midBlock' operandRhs]
     pure (AST.TyBool, Operand (OperandNamed value) (sizeOf AST.TyBool))
 transExpr (AST.Located _ (AST.ExprBinOp lhs AST.BinOpOr rhs)) = do
     endBlock <- newBlock "orEnd"
     midBlock <- newBlock "orMid"
-    block <- use girCurrentBlock
 
     operandLhs <- transExprTypeEqual AST.TyBool lhs
+    block <- use girCurrentBlock
     setEnd $ BlockEndBranchCond operandLhs endBlock midBlock
 
-    operandRhs <- inBlock midBlock $ do
+    (midBlock', operandRhs) <- inBlock midBlock $ do
         operandRhs <- transExprTypeEqual AST.TyBool rhs
         setEnd $ BlockEndBranch endBlock
-        pure operandRhs
+        midBlock' <- use girCurrentBlock
+        pure (midBlock', operandRhs)
 
     switchToBlock endBlock
-    value <- emitPhi (Just "or") [PhiBranch block (Operand (OperandInt 1) (sizeOf AST.TyBool)), PhiBranch midBlock operandRhs]
+    value <- emitPhi (Just "or") [PhiBranch block (Operand (OperandInt 1) (sizeOf AST.TyBool)), PhiBranch midBlock' operandRhs]
     pure (AST.TyBool, Operand (OperandNamed value) (sizeOf AST.TyBool))
 transExpr ex@(AST.Located l (AST.ExprBinOp lhs op rhs)) = do
     (tyLhs, operandLhs) <- transExpr lhs

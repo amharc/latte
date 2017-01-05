@@ -19,7 +19,7 @@ char *concat(char *lhs, char *rhs) {
 
 int _function_7_readInt(void) {
     int i;
-    scanf("%d", &i);
+    scanf(" %d ", &i);
     return i;
 }
 
@@ -41,6 +41,11 @@ void* clone_object(void *data, size_t size) {
     void *res = malloc(size);
     memcpy(res, data, size);
     return res;
+}
+
+void _function_5_error(void) {
+    fprintf(stderr, "error\n");
+    exit(1);
 }
 
 extern int _function_4_main();

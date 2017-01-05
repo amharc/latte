@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Middleend.Propagate (opt) where
 
@@ -12,6 +13,7 @@ import Data.IORef
 import qualified Data.Map as Map
 import Data.Maybe
 import qualified Data.Sequence as Seq
+import qualified Language.Latte.Backend.CodeGen as Backend
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
 
@@ -46,18 +48,18 @@ runInstruction acc instr = do
             pure acc
   where
     valueOf (IConst op) = Just op
-    valueOf (BinOp (Operand (OperandInt 0) _) BinOpPlus o) = Just o
-    valueOf (BinOp o BinOpPlus (Operand (OperandInt 0) _)) = Just o
-    valueOf (BinOp o BinOpMinus (Operand (OperandInt 0) _)) = Just o
-    valueOf (BinOp (Operand (OperandInt 0) sz) BinOpTimes _) = Just $ Operand (OperandInt 0) sz
-    valueOf (BinOp _ BinOpTimes (Operand (OperandInt 0) sz)) = Just $ Operand (OperandInt 0) sz
-    valueOf (BinOp _ BinOpDivide (Operand (OperandInt 0) _)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
-    valueOf (BinOp _ BinOpModulo (Operand (OperandInt 0) _)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
-    valueOf (BinOp (Operand (OperandInt 1) _) BinOpTimes o) = Just o
-    valueOf (BinOp o BinOpTimes (Operand (OperandInt 1) _)) = Just o
-    valueOf (BinOp o BinOpDivide (Operand (OperandInt 1) _)) = Just o
-    valueOf (BinOp _ BinOpModulo (Operand (OperandInt 1) sz)) = Just $ Operand (OperandInt 0) sz
-    valueOf (BinOp (Operand (OperandInt lhs) sz) op (Operand (OperandInt rhs) _)) = Just $ Operand (OperandInt value) sz
+    valueOf (BinOp (isInt -> Just 0) BinOpPlus o) = Just o
+    valueOf (BinOp o BinOpPlus (isInt -> Just 0)) = Just o
+    valueOf (BinOp o BinOpMinus (isInt -> Just 0)) = Just o
+    valueOf (BinOp o@(isInt -> Just 0) BinOpTimes _) = Just $ Operand (OperandInt 0) (o ^. operandSize)
+    valueOf (BinOp _ BinOpTimes o@(isInt -> Just 0)) = Just $ Operand (OperandInt 0) (o ^. operandSize)
+    valueOf (BinOp _ BinOpDivide (isInt -> Just 0)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
+    valueOf (BinOp _ BinOpModulo (isInt -> Just 0)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
+    valueOf (BinOp (isInt -> Just 1) BinOpTimes o) = Just o
+    valueOf (BinOp o BinOpTimes (isInt -> Just 1)) = Just o
+    valueOf (BinOp o BinOpDivide (isInt -> Just 1)) = Just o
+    valueOf (BinOp _ BinOpModulo o@(isInt -> Just 1)) = Just $ Operand (OperandInt 0) (o ^. operandSize)
+    valueOf (BinOp o@(isInt -> Just lhs) op (isInt -> Just rhs)) = Just $ Operand (OperandInt value) (o ^. operandSize)
       where
         iverson True = 1
         iverson False = 0
@@ -87,3 +89,8 @@ applySubst subst = operands %~ mut
   where
     mut o@(Operand (OperandNamed name) _) = fromMaybe o $ Map.lookup name subst
     mut o = o
+
+isInt :: Operand -> Maybe Int
+isInt (Operand (OperandInt i) _) = Just i
+isInt (Operand (OperandSize sz) _) = Just $ Backend.sizeToInt sz
+isInt _ = Nothing

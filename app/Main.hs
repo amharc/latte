@@ -3,7 +3,6 @@ module Main where
 
 import Control.Monad
 import Control.Monad.State
-import Control.Monad.IO.Class
 import qualified Language.Latte.Frontend.AST as P
 import qualified Language.Latte.Frontend.Parser as P
 import qualified Language.Latte.Frontend.GenIR as P
@@ -19,6 +18,7 @@ import qualified Language.Latte.Middleend.StrengthReduction as StrengthReduction
 import qualified Language.Latte.Middleend.Fixed as Fixed
 import qualified Language.Latte.Backend.CodeGen as B
 import qualified Language.Latte.Backend.Stringify as B
+import qualified Language.Latte.Backend.Peephole as Peephole
 import Text.Parsec.ByteString
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
@@ -64,8 +64,10 @@ middle program = do
 
         CheckUnreachability.check
 
-        M.whenNoDiagnostics $
-            get >>= B.emitState >>= liftIO . flip B.translateOut stdout
+        M.whenNoDiagnostics $ do
+            asm <-get >>= B.emitState
+            liftIO $ B.translateOut asm stdout
+            liftIO $ B.translateOut (Peephole.opt asm) stderr
 
     forM_ diags $ \diag ->
         hPutStrLn stderr . render $ pPrint diag

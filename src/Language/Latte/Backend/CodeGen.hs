@@ -6,7 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-type-defaults #-}
-module Language.Latte.Backend.CodeGen (emitState) where
+module Language.Latte.Backend.CodeGen (emitState, sizeToInt) where
 
 import Control.Lens
 import Control.Monad.IO.Class

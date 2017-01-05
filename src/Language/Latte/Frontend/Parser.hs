@@ -11,13 +11,13 @@ import Language.Latte.Frontend.AST
 import Text.Parsec
 import Text.Parsec.Expr
 import Text.Parsec.ByteString
-import qualified Text.Parsec.Token as P
+import qualified Text.Parsec.TokenMod as P
 
 latteDef :: P.GenLanguageDef BS.ByteString u Identity
 latteDef = P.LanguageDef
     { P.commentStart = "/*"
     , P.commentEnd = "*/"
-    , P.commentLine = "//"
+    , P.commentLine = void $ Text.Parsec.string "//" <|> Text.Parsec.string "#"
     , P.nestedComments = True
     , P.identStart = letter
     , P.identLetter = alphaNum <|> oneOf "_'"

@@ -34,6 +34,8 @@ library
                        Language.Latte.Backend.Asm
                        Language.Latte.Backend.CodeGen
                        Language.Latte.Backend.Stringify
+                       Language.Latte.Backend.Peephole
+                       Text.Parsec.TokenMod
   build-depends:       base >= 4.9 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0
