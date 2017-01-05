@@ -52,6 +52,7 @@ data Instruction
     | Neg Multiplier Operand
     | Set Flag Operand
     | Movsbq Operand Operand
+    | Xchg Multiplier Operand Operand
     | Test Multiplier Operand Operand
     | Cqto
     | Inc Multiplier Operand

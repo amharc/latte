@@ -42,10 +42,17 @@ data EmitterState = EmitterState
     , _esInFlags :: Maybe (Asm.Flag, Name)
     }
 
+data ParallelMoveState = ParallelMoveState
+    { _pmsIncoming :: Map.Map Name Operand
+    , _pmsOutgoing :: Map.Map Name (Set.Set Name)
+    }
+    deriving Show
+
 data RegisterState = RSReg | RSMem | RSRegMem | RSNone
 
 makeLenses ''EmitterState
 makePrisms ''RegisterState
+makeLenses ''ParallelMoveState
 
 emitState :: MonadIO m => MiddleEndState -> m (Seq.Seq Asm.Instruction)
 emitState st = do
@@ -195,14 +202,13 @@ translateBlock block = do
     linkTo target = do
         emit . Asm.Label $ phiBlockIdent block target
         phis <- liftIO . readIORef $ target ^. blockPhi
-        forM_ phis $ \phi ->
+
+        moves <- flip execStateT [] $ forM_ phis $ \phi ->
             forM_ (phi ^. phiBranches) $ \branch ->        
                 when (branch ^. phiFrom == block) $ do
-                    reg <- lockInRegister $ phi ^. name
-                    op <- getAsmOperand (branch ^. phiValue)
-                    emit $ Asm.Mov Asm.Mult8 op (Asm.OpRegister reg)
-                    writeBack reg (phi ^. name)
-                    unlockRegisters
+                    modify $ cons (branch ^. phiValue, phi ^. name)
+
+        parallelMove moves
 
         use (esLiveAfterPhi . at target . singular _Just) >>= mapM_ restoreVar
         emit . Asm.Jump $ blockIdent target
@@ -220,6 +226,66 @@ translateBlock block = do
         _ -> pure acc
 
     annotateLive = calcLiveRegs >=> emit . Asm.AnnotateLiveStart
+
+parallelMove :: (MonadState EmitterState m) => [(Operand, Name)] -> m ()
+parallelMove pairs = evalStateT (go remaining0 >> cycles) st0
+  where
+    st0 = ParallelMoveState
+        { _pmsIncoming = foldr (\(from, to) acc -> acc & at to ?~ from) Map.empty pairs
+        , _pmsOutgoing = foldr
+                (curry $ \case
+                    ((Operand (OperandNamed from) _, to), acc) -> acc & at from . non Set.empty . contains to .~ True
+                    (_, acc) -> acc)
+                Map.empty pairs
+        }
+    remaining0 = views pmsIncoming Map.keysSet st0 `Set.difference` views pmsOutgoing Map.keysSet st0
+
+    go remaining = forM_ (Set.minView remaining) $ \(leaf, rest) -> do
+        st <- get
+        Just source <- use (pmsIncoming . at leaf)
+        emitSimpleMove source leaf
+        pmsIncoming . at leaf .= Nothing
+        case source of
+            Operand (OperandNamed source) _ -> do
+                pmsOutgoing . at source . non Set.empty . contains leaf .= False
+                
+                noOut <- uses (pmsOutgoing . at source) null
+                noIn <- uses (pmsIncoming . at source) null
+
+                if not noIn && noOut
+                    then go $ Set.insert source rest
+                    else go rest
+            _ -> go rest
+
+    cycles = uses pmsIncoming Map.minViewWithKey >>= \case
+        Nothing -> pure ()
+        Just ((start, Operand (OperandNamed prev) _), _) -> do
+            emitSwap start prev
+            pmsIncoming . at start .= Nothing
+            cycle start prev
+            cycles
+
+    cycle start cur | start == cur = pure ()
+    cycle start cur = use (pmsIncoming . at cur) >>= \case
+        Just (Operand (OperandNamed prev) _) -> do
+            emitSwap cur prev
+            pmsIncoming . at cur .= Nothing
+            cycle start prev
+        x -> error $ show x
+
+    emitSwap lhs rhs = lift $ do
+        reg <- lockInRegister lhs
+        op <- getAsmOperand rhs
+        emit $ Asm.Xchg Asm.Mult8 op (Asm.OpRegister reg)
+        writeBack reg lhs
+        unlockRegisters
+
+    emitSimpleMove from to = lift $ do
+        reg <- lockInRegister to
+        op <- getAsmOperand from
+        emit $ Asm.Mov Asm.Mult8 op (Asm.OpRegister reg)
+        writeBack reg to
+        unlockRegisters
 
 prologue :: MonadState EmitterState m => m ()
 prologue = do

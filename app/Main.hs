@@ -67,7 +67,7 @@ middle program = do
         M.whenNoDiagnostics $ do
             asm <-get >>= B.emitState
             liftIO $ B.translateOut asm stdout
-            liftIO $ B.translateOut (Peephole.opt asm) stderr
+            --liftIO $ B.translateOut (Peephole.opt asm) stderr
 
     forM_ diags $ \diag ->
         hPutStrLn stderr . render $ pPrint diag

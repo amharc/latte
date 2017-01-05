@@ -137,6 +137,7 @@ instance Trans Instruction where
     trans (Imul mult lhs rhs) = basicInstr "imul" mult lhs rhs
     trans (Lea mult lhs rhs) = basicInstr "lea" mult lhs rhs
     trans (Mov mult lhs rhs) = basicInstr "mov" mult lhs rhs
+    trans (Xchg mult lhs rhs) = basicInstr "xchg" mult lhs rhs
     trans (And mult lhs rhs) = basicInstr "and" mult lhs rhs
     trans (Or mult lhs rhs) = basicInstr "or" mult lhs rhs
     trans (Xor mult lhs rhs) = basicInstr "xor" mult lhs rhs

@@ -43,8 +43,9 @@ backward instr old@(instrs, live) = case instr of
     uses instr = uses' instr `Set.union` (allRegs (instr ^.. template :: [Memory]))
 
     uses' :: Instruction -> Set.Set Register
-    uses' (Mov _ (OpRegister src) _) = allRegs src
-    uses' (Lea _ (OpRegister src) _) = allRegs src
+    uses' (Mov _ (OpRegister src) _) = allRegs [src]
+    uses' (Xchg _ (OpRegister src) (OpRegister dst)) = allRegs [src, dst]
+    uses' (Lea _ (OpRegister src) _) = allRegs [src]
     uses' (Idiv _ op) = allRegs (op, RAX, RDX)
     uses' (Set _ _) = allRegs [RFLAGS]
     uses' (Call op) = allRegs (op, RDI, RSI, RDX, RCX, R8, R9)
@@ -61,6 +62,7 @@ backward instr old@(instrs, live) = case instr of
 
     kills :: Instruction -> Set.Set Register
     kills (Mov _ _ (OpRegister dst)) = allRegs [dst]
+    kills (Xchg _ (OpRegister src) (OpRegister dst)) = allRegs [src, dst]
     kills (Add _ _ (OpRegister dst)) = allRegs [RFLAGS, dst]
     kills (Add _ _ _) = allRegs [RFLAGS]
     kills (Sub _ _ (OpRegister dst)) = allRegs [RFLAGS, dst]
@@ -96,6 +98,8 @@ backward instr old@(instrs, live) = case instr of
 
     protected :: Instruction -> Bool
     protected (Mov _ _ (OpMemory _)) = True
+    protected (Xchg _ _ (OpMemory _)) = True
+    protected (Xchg _ (OpMemory _) _) = True
     protected (Add _ _ (OpMemory _)) = True
     protected (Sub _ _ (OpMemory _)) = True
     protected (Imul _ _ (OpMemory _)) = True

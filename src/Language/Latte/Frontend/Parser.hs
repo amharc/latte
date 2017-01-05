@@ -155,7 +155,7 @@ stmt declAllowed =
             reserved "for"
             (ty, name, ex) <- parens ((,,) <$> type_ False <*> ident <* colon <*> located expr)
             StmtFor ty name ex <$> located (stmt False))
-      <|> (if declAllowed then try (StmtDecl <$> localDecl <* semi) else unexpected "declaration")
+      <|> (if declAllowed then try (StmtDecl <$> localDecl True <* semi) else unexpected "declaration")
       <|> (exprBased <* semi)
       <|> (semi >> pure StmtNone)
       <?> "statement"
@@ -219,11 +219,12 @@ expr = (view obj <$> buildExpressionParser opsTable (located cast)) <?> "express
             let ty' = foldl (const . TyArray) ty dims
             pure $ ExprNewArr ty' dim
 
-localDecl :: Parser LocalDecl
-localDecl = LocalDecl <$> type_ False <*> (located localDeclItem `sepBy` comma) <?> "declaration"
+localDecl :: Bool -> Parser LocalDecl
+localDecl initAllowed = LocalDecl <$> type_ False <*> (located (localDeclItem initAllowed) `sepBy` comma) <?> "declaration"
 
-localDeclItem :: Parser LocalDeclItem
-localDeclItem = LocalDeclItem <$> ident <*> optionMaybe (reservedOp "=" >> located expr)
+localDeclItem :: Bool -> Parser LocalDeclItem
+localDeclItem True = LocalDeclItem <$> ident <*> optionMaybe (reservedOp "=" >> located expr)
+localDeclItem False = LocalDeclItem <$> ident <*> pure Nothing
 
 classDecl :: Parser ClassDecl
 classDecl = do
@@ -233,6 +234,5 @@ classDecl = do
     members <- braces . many $ located member
     pure $ ClassDecl name base members
   where
-    member = try (ClassMemberField <$> field)
+    member = try (ClassMemberField <$> (localDecl False <* semi))
              <|> (ClassMemberMethod <$> funcDecl)
-    field = ClassField <$> type_ False <*> ident <* semi

@@ -147,7 +147,7 @@ data ClassDecl = ClassDecl
     deriving Show
 
 data ClassMember
-    = ClassMemberField !ClassField
+    = ClassMemberField !LocalDecl
     | ClassMemberMethod !FuncDecl
     deriving Show
 

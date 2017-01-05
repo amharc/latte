@@ -527,8 +527,8 @@ transClassDecl :: GIRMonad m => AST.Located AST.ClassDecl -> m ()
 transClassDecl decl = do
     Just info <- view $ girClasses . at (decl ^. AST.obj . AST.className)
     local (girCurrentClass ?~ info) $ forM_ (decl ^. AST.obj . AST.classMembers) $ \case
-        l@(AST.Located _ (AST.ClassMemberField field)) ->
-            checkType l (field ^. AST.classFieldType)
+        l@(AST.Located _ (AST.ClassMemberField decl)) ->
+            checkType l (decl ^. AST.localDeclType)
         AST.Located l (AST.ClassMemberMethod func) ->
             transFuncDecl (Just name) (AST.Located l func)
 
@@ -616,7 +616,10 @@ transProgram (AST.Program prog) = do
       where
         name = decl ^. AST.obj . AST.className
         mbase = decl ^. AST.obj . AST.classBase
-        fields = [AST.Located l field | AST.Located l (AST.ClassMemberField field) <- decl ^. AST.obj . AST.classMembers]
+        fields = [AST.Located l (AST.ClassField (localDecl ^. AST.localDeclType) name)
+                 | AST.Located _ (AST.ClassMemberField localDecl) <- decl ^. AST.obj . AST.classMembers
+                 , AST.Located l (AST.LocalDeclItem name _) <- localDecl ^. AST.localDeclItems
+                 ]
         methods = [AST.Located l func | AST.Located l (AST.ClassMemberMethod func) <- decl ^. AST.obj . AST.classMembers]
 
         addSelf mbaseInfo acc = do

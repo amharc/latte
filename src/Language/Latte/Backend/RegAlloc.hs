@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Backend.RegAlloc where
@@ -43,7 +44,16 @@ interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty
         liveBeforeBody <- foldrM (update DAE.stepInstruction) liveBeforeEnd body
         
         phi <- liftIO . readIORef $ block ^. blockPhi
-        foldrM (update DAE.stepPhi) liveBeforeBody phi
+        _ <- foldrM (update DAE.stepPhi) liveBeforeBody phi
+
+        phi & forMOf_ operands $ \case
+            Operand (OperandNamed other) _ ->
+                phi & forMOf_ (traverse . name) $ \name ->
+                    when (other /= name) $ do
+                        addDirected name other
+                        addDirected other name
+            _ -> pure ()
+                        
   where
     update :: (MonadState InterferenceGraph m, HasNames a)
         => (DCE.LiveVariables -> a -> DCE.LiveVariables)
