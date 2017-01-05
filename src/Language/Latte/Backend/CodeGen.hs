@@ -263,7 +263,9 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         call (MemoryGlobal "alloc") [length]
         writeBack Asm.RAX name
 
-    (Just _name, IIntristic (IntristicClone _memory)) -> fail "clone unimplemented" 
+    (Just name, IIntristic (IntristicClone prototype fields)) -> do
+        call (MemoryGlobal "clone_object") [prototype, Operand (OperandInt $ 8 * fields) Size32]
+        writeBack Asm.RAX name
 
     (Just name, IIntristic (IntristicConcat lhs rhs)) -> do
         call (MemoryGlobal "concat") [lhs, rhs]

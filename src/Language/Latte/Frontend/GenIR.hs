@@ -206,7 +206,7 @@ transStmt st@(AST.Located l (AST.StmtFor ty idx array body)) = transStmt $
     declareIndex = arrLoc . AST.StmtDecl $ AST.LocalDecl AST.TyInt
             [arrLoc $ AST.LocalDeclItem "$idx" Nothing]
 
-    declareArray = arrLoc . AST.StmtDecl $ AST.LocalDecl (AST.TyArray ty)
+    declareArray = arrLoc . AST.StmtDecl $ AST.LocalDecl AST.TyAuto
             [arrLoc $ AST.LocalDeclItem "$arr" (Just array)]
 
     while = stLoc $ AST.StmtWhile (stLoc whileCond) (stLoc whileBody)
@@ -243,10 +243,18 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
                 AST.TyString -> do
                     emptyStr <- emitInstr (Just "emptyString") (GetAddr $ MemoryGlobal "LATC_emptyString") li []
                     pure (AST.TyString, Operand (OperandNamed emptyStr) SizePtr)
+                AST.TyAuto -> do
+                    simpleError locItem "Auto not allowed here"
+                    pure (AST.TyNull, Operand OperandUndef SizePtr)
                 _ -> pure (expectedType, Operand (OperandInt 0) (sizeOf expectedType))
+
         Just var <- use $ girBlockVariables . at (item ^. AST.localDeclName)
         girVariables . at (item ^. AST.localDeclName) ?= var
-        checkTypeImplicitConv locItem expectedType ty
+
+        case expectedType of
+            AST.TyAuto -> girVariables . at (item ^. AST.localDeclName) . singular _Just . varType .= ty
+            _ -> checkTypeImplicitConv locItem expectedType ty
+
         void $ emitInstr Nothing
             (Store (memoryOfVariable $ var ^. varLoc) (sizeOf ty) operand)
             li [InstrComment $ "initialize" <+> pPrint item]
@@ -360,7 +368,9 @@ transExpr ex@(AST.Located l (AST.ExprNew ty)) = do
     checkType ex ty
     case ty of
         AST.TyClass name -> do
-            val <- emitInstr Nothing (IIntristic (IntristicClone (MemoryGlobal (mangleClassPrototype name))))
+            Just desc <- view $ girClasses . at name
+            op <- emitInstr Nothing (GetAddr (MemoryGlobal (mangleClassPrototype name))) l []
+            val <- emitInstr Nothing (IIntristic $ IntristicClone (Operand (OperandNamed op) SizePtr) (1 + length (desc ^. classObjFields)))
                     l [InstrComment $ pPrint ex]
             pure (ty, Operand (OperandNamed val) (sizeOf ty))
         _ -> do
@@ -369,8 +379,10 @@ transExpr ex@(AST.Located l (AST.ExprNew ty)) = do
 transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
     checkType ex ty
     lenOperand <- transExprTypeEqual AST.TyInt lenExpr
-    sizeOperand <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$> emitInstr Nothing (BinOp lenOperand BinOpTimes (Operand (OperandSize $ sizeOf ty) (sizeOf AST.TyInt))) l []
-    sizeOpWithField <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$> emitInstr Nothing (BinOp sizeOperand BinOpPlus (Operand (OperandSize Size32) (sizeOf AST.TyInt))) l []
+    sizeOperand <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$>
+        emitInstr Nothing (BinOp lenOperand BinOpTimes (Operand (OperandSize $ sizeOf ty) (sizeOf AST.TyInt))) l []
+    sizeOpWithField <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$>
+        emitInstr Nothing (BinOp sizeOperand BinOpPlus (Operand (OperandSize Size32) (sizeOf AST.TyInt))) l []
     val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOpWithField objectType)) l [InstrComment $ pPrint ex]
     _ <- emitInstr Nothing (Store (MemoryOffset (Operand (OperandNamed val) SizePtr) (Operand (OperandInt 0) Size32) SizePtr) Size32 lenOperand) l []
     pure (AST.TyArray ty, Operand (OperandNamed val) SizePtr)
@@ -403,6 +415,13 @@ transLval lval@(AST.Located l (AST.LvalVar ident)) =
                 pure (field ^. classFieldType, MemoryOffset this (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr)
         Just var -> do
             pure (var ^. varType, memoryOfVariable $ var ^. varLoc)
+transLval lval@(AST.Located l AST.LvalThis) =
+    view girCurrentClass >>= \case
+        Nothing -> do
+            simpleError lval $ "Not in class"
+            pure (AST.TyNull, MemoryUndef)
+        Just desc -> do
+            pure (AST.TyClass $ desc ^. classInfoDecl . AST.obj . AST.className, MemoryArgument 0)
 transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
     (tyArr, operandArr) <- transExpr arrExpr
     operandIdx <- transExprTypeEqual AST.TyInt idxExpr
@@ -460,7 +479,7 @@ transFunCall lval@(AST.Located l (AST.LvalField objExpr name)) = do
         _ -> do
             simpleError lval $ "not a class"
             pure Nothing
-transFunCall lval@(AST.Located _ (AST.LvalArray _ _)) = do
+transFunCall lval = do
     simpleError lval "Not a function"
     pure Nothing
 
@@ -536,6 +555,7 @@ emitPrototype info = internObject (mangleClassPrototype name) prototype
     defaultValue (AST.TyClass _) = ObjectFieldNull
     defaultValue AST.TyNull = ObjectFieldNull
     defaultValue AST.TyString = ObjectFieldRef "LATC_emptyString"
+    defaultValue AST.TyAuto = error "Auto not allowed here"
 
 transProgram :: GIRMonad m => AST.Program -> m ()
 transProgram (AST.Program prog) = do
@@ -680,6 +700,7 @@ checkType ctx AST.TyBool = pure ()
 checkType ctx AST.TyVoid = pure ()
 checkType ctx AST.TyString = pure ()
 checkType ctx AST.TyNull = pure ()
+checkType ctx AST.TyAuto = pure ()
 checkType ctx (AST.TyArray ty) = checkType ctx ty
 checkType ctx (AST.TyClass name) =
     view (girClasses . at name) >>= \case
@@ -732,16 +753,23 @@ checkTypeImplicitConv ctx expected got = case (expected, got) of
     name info = info ^. classInfoDecl . AST.obj . AST.className
     
 checkTypesComparable :: (GIRMonad m, Reportible r) => r -> AST.Type -> AST.Type -> m ()
-checkTypesComparable ctx expected got = unless (comparable expected got) . simpleError ctx $ hsep
-    [ "Type mismatch: cannot compare"
-    , pPrint expected
-    , "with"
-    , pPrint got
-    ]
+checkTypesComparable ctx expected got = do
+    c <- comparable expected got
+    unless c . simpleError ctx $ hsep
+        [ "Type mismatch: cannot compare"
+        , pPrint expected
+        , "with"
+        , pPrint got
+        ]
   where
-    comparable AST.TyNull (AST.TyClass _) = True
-    comparable (AST.TyClass _) AST.TyNull = True
-    comparable t t' = t == t'
+    comparable AST.TyNull (AST.TyClass _) = pure True
+    comparable (AST.TyClass _) AST.TyNull = pure True
+    comparable (AST.TyClass cls) (AST.TyClass cls') = (==) <$> lastName cls <*> lastName cls'
+      where
+        lastName cls = do
+            Just info <- view $ girClasses . at cls
+            pure $ last (classBases info) ^. classInfoDecl . AST.obj . AST.className
+    comparable t t' = pure $ t == t'
 
 classBases :: ClassInfo -> [ClassInfo]
 classBases cls = case cls ^. classBase of
@@ -775,6 +803,7 @@ sizeOf AST.TyString = SizePtr
 sizeOf (AST.TyArray _) = SizePtr
 sizeOf (AST.TyClass _) = SizePtr
 sizeOf AST.TyNull = SizePtr
+sizeOf AST.TyAuto = error "auto not allowed here"
 
 generateIR :: AST.Program -> MEMonad ()
 generateIR program = do

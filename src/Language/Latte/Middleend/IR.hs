@@ -208,7 +208,7 @@ data UnOperator
 
 data Intristic
     = IntristicAlloc Operand ObjectType
-    | IntristicClone Memory
+    | IntristicClone Operand Int
     | IntristicConcat Operand Operand
     deriving (Eq, Show)
 
@@ -376,7 +376,7 @@ instance Pretty Call where
 
 instance Pretty Intristic where
     pPrint (IntristicAlloc size ty) = "alloc" <+> pPrint size <+> "bytes of" <+> pPrint ty
-    pPrint (IntristicClone mem) = "clone" <+> pPrint mem
+    pPrint (IntristicClone mem bytes) = "clone" <+> int bytes <+> "fields of" <+> pPrint mem
     pPrint (IntristicConcat lhs rhs) = "concat" <+> pPrint lhs <> comma <+> pPrint rhs
 
 instance Pretty ObjectType where
@@ -544,7 +544,7 @@ instance HasOperands Call where
 
 instance HasOperands Intristic where
     operands f (IntristicAlloc op ot) = IntristicAlloc <$> operands f op <*> pure ot
-    operands f (IntristicClone mem) = IntristicClone <$> operands f mem
+    operands f (IntristicClone mem size) = IntristicClone <$> operands f mem <*> pure size
     operands f (IntristicConcat lhs rhs) = IntristicConcat <$> operands f lhs <*> operands f rhs
 
 instance HasOperands IncDec where

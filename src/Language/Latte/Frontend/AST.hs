@@ -59,6 +59,7 @@ data Type
     | TyVoid
     | TyString
     | TyNull
+    | TyAuto
     | TyArray !Type
     | TyClass !Ident
     deriving (Eq, Show)
@@ -127,6 +128,7 @@ data LocalDeclItem = LocalDeclItem
 
 data Lval
     = LvalVar !Ident
+    | LvalThis
     | LvalArray !(Located Expr) !(Located Expr)
     | LvalField !(Located Expr) !Ident
     deriving Show
@@ -205,6 +207,7 @@ instance Pretty Type where
     pPrint TyVoid = "void"
     pPrint TyString = "string"
     pPrint TyNull = "null"
+    pPrint TyAuto = "auto"
     pPrint (TyArray ty) = pPrint ty <> "[]"
     pPrint (TyClass ident) = pPrint ident
 
@@ -281,6 +284,7 @@ instance Pretty FunArg where
 
 instance Pretty Lval where
     pPrintPrec _ _ (LvalVar ident) = pPrint ident
+    pPrintPrec _ _ LvalThis = "self"
     pPrintPrec l _ (LvalArray (Loc arr) (Loc idx)) =
         pPrintPrec l 8 arr <> brackets (pPrint idx)
     pPrintPrec l _ (LvalField (Loc object) field) =

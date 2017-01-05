@@ -154,8 +154,8 @@ instance Trans Instruction where
     trans (Movsbq lhs rhs) = sbs "\tmovsbq " <> transMult Mult1 lhs <> ", " <> transMult Mult8 rhs
     trans (Test mult lhs rhs) = sbs "\ttest" <> suffix mult <> " " <> transMult mult lhs <> ", " <> transMult mult rhs
     trans Cqto = sbs "\tcqto"
-    trans (Inc _ op) = sbs "\tinc " <> trans op
-    trans (Dec _ op) = sbs "\tdec " <> trans op
+    trans (Inc mult op) = sbs "\tinc" <> suffix mult <> sbs " " <> trans op
+    trans (Dec mult op) = sbs "\tdec" <> suffix mult <> sbs " " <> trans op
     trans (JumpCond flag ident) = sbs "\tj" <> trans flag <> sbs " " <> trans ident
     trans (Jump ident) = sbs "\tjmp " <> trans ident
     trans (GlobalFunc ident) = sbs ".global " <> trans ident

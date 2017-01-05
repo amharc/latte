@@ -21,7 +21,7 @@ latteDef = P.LanguageDef
     , P.nestedComments = True
     , P.identStart = letter
     , P.identLetter = alphaNum <|> oneOf "_'"
-    , P.reservedNames = ["int", "void", "boolean", "string", "return", "for", "while", "new", "class", "extends", "null", "if", "else"]
+    , P.reservedNames = ["int", "void", "boolean", "string", "return", "for", "while", "new", "class", "extends", "null", "if", "else", "self"]
     , P.reservedOpNames = ["+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "!", "||", "&&", "="]
     , P.opStart = P.opLetter latteDef
     , P.opLetter = oneOf "+-*/%<>=!&|"
@@ -199,6 +199,7 @@ expr = (view obj <$> buildExpressionParser opsTable (located cast)) <?> "express
            <|> (ExprString . BS.pack <$> stringLiteral)
            <|> new
            <|> parens expr
+           <|> (reserved "self" >> pure (ExprLval LvalThis))
            <|> (ExprLval . LvalVar <$> ident)
     
     int = do
