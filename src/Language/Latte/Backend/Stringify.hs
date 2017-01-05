@@ -140,6 +140,8 @@ instance Trans Instruction where
     trans (And mult lhs rhs) = basicInstr "and" mult lhs rhs
     trans (Or mult lhs rhs) = basicInstr "or" mult lhs rhs
     trans (Xor mult lhs rhs) = basicInstr "xor" mult lhs rhs
+    trans (Sal mult lhs rhs) = basicInstr "sal" mult lhs rhs
+    trans (Sar mult lhs rhs) = basicInstr "sar" mult lhs rhs
     trans (Idiv mult op) = mconcat
         [ sbs "\tidiv"
         , suffix mult

@@ -43,6 +43,8 @@ data Instruction
     | And Multiplier Operand Operand
     | Or Multiplier Operand Operand
     | Xor Multiplier Operand Operand
+    | Sal Multiplier Operand Operand
+    | Sar Multiplier Operand Operand
     | Idiv Multiplier Operand
     | Cmp Multiplier Operand Operand
     | Neg Multiplier Operand

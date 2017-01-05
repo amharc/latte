@@ -197,7 +197,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (Nothing, Store to size (Operand (OperandSize sz) _)) -> do
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpImmediate $ sizeToInt sz) (Asm.OpMemory mem)
-    (Nothing, Store to size value) -> do
+    (_, Store to size value) -> do
         reg <- lockInRegister value
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpRegister reg) (Asm.OpMemory mem)
@@ -242,6 +242,8 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (Just name, BinOp lhs BinOpNotEqual rhs) -> compare name lhs rhs Asm.FlagNotEqual
     (Just name, BinOp lhs BinOpAnd rhs) -> simpleBinOp name lhs rhs Asm.And
     (Just name, BinOp lhs BinOpOr rhs) -> simpleBinOp name lhs rhs Asm.Or
+    (Just name, BinOp lhs BinOpShiftLeft rhs) -> simpleBinOp name lhs rhs Asm.Sal
+    (Just name, BinOp lhs BinOpShiftRight rhs) -> simpleBinOp name lhs rhs Asm.Sar
 
     (Just name, UnOp UnOpNot arg) -> do
         reg <- lockInRegister name
@@ -281,7 +283,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         writeBack reg name
         unlockRegisters
 
-    (_, _) -> fail "Invalid instruction"
+    _ -> error "unreachable"
   where
     simpleBinOp name lhs rhs f = do
         reg <- lockInRegister name

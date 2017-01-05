@@ -6,6 +6,7 @@ module Language.Latte.Middleend.Propagate (opt) where
 import Control.Lens
 import Control.Monad.IO.Class
 import Control.Monad.State
+import Data.Bits
 import Data.Foldable
 import Data.IORef
 import qualified Data.Map as Map
@@ -52,6 +53,10 @@ runInstruction acc instr = do
     valueOf (BinOp _ BinOpTimes (Operand (OperandInt 0) sz)) = Just $ Operand (OperandInt 0) sz
     valueOf (BinOp _ BinOpDivide (Operand (OperandInt 0) _)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
     valueOf (BinOp _ BinOpModulo (Operand (OperandInt 0) _)) = Just $ Operand OperandUndef SizePtr -- undefined behaviour
+    valueOf (BinOp (Operand (OperandInt 1) _) BinOpTimes o) = Just o
+    valueOf (BinOp o BinOpTimes (Operand (OperandInt 1) _)) = Just o
+    valueOf (BinOp o BinOpDivide (Operand (OperandInt 1) _)) = Just o
+    valueOf (BinOp _ BinOpModulo (Operand (OperandInt 1) sz)) = Just $ Operand (OperandInt 0) sz
     valueOf (BinOp (Operand (OperandInt lhs) sz) op (Operand (OperandInt rhs) _)) = Just $ Operand (OperandInt value) sz
       where
         iverson True = 1
@@ -71,6 +76,8 @@ runInstruction acc instr = do
             BinOpNotEqual -> iverson $ lhs /= rhs
             BinOpAnd -> iverson $ (lhs /= 0) && (rhs /= 0)
             BinOpOr -> iverson $ (lhs /= 0) || (rhs /= 0)
+            BinOpShiftLeft -> lhs `shiftL` rhs
+            BinOpShiftRight -> lhs `shiftR` rhs
     valueOf (UnOp UnOpNeg (Operand (OperandInt i) sz)) = Just $ Operand (OperandInt $ -i) sz
     valueOf (UnOp UnOpNot (Operand (OperandInt i) sz)) = Just $ Operand (OperandInt $ 1 - i) sz
     valueOf _ = Nothing

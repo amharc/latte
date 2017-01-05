@@ -28,6 +28,7 @@ library
                        Language.Latte.Middleend.ShrinkEnds
                        Language.Latte.Middleend.DataflowAnalysisEngine
                        Language.Latte.Middleend.DeadCodeElimination
+                       Language.Latte.Middleend.StrengthReduction
                        Language.Latte.Backend.RegAlloc
                        Language.Latte.Backend.Asm
                        Language.Latte.Backend.CodeGen

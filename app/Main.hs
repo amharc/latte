@@ -14,6 +14,7 @@ import qualified Language.Latte.Middleend.SimplifyControlFlow as SimplifyControl
 import qualified Language.Latte.Middleend.ShrinkEnds as ShrinkEnds
 import qualified Language.Latte.Middleend.Propagate as Propagate
 import qualified Language.Latte.Middleend.DeadCodeElimination as DeadCodeElimination
+import qualified Language.Latte.Middleend.StrengthReduction as StrengthReduction
 import qualified Language.Latte.Middleend.Fixed as Fixed
 import qualified Language.Latte.Backend.CodeGen as B
 import qualified Language.Latte.Backend.Stringify as B
@@ -43,6 +44,10 @@ middle program = do
             liftIO $ hPutStr stderr "\n\nShrinkEnds\n\n"
             ShrinkEnds.opt
             M.debugState >>= liftIO . hPutStrLn stderr . render 
+
+            liftIO $ hPutStr stderr "\n\nStrength reduction\n\n"
+            StrengthReduction.opt
+            M.debugState >>= liftIO . hPutStrLn stderr . render
 
             liftIO $ hPutStr stderr "\n\nPropagate\n\n"
             Propagate.opt

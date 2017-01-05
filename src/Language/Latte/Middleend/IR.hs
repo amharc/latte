@@ -189,6 +189,8 @@ data BinOperator
     | BinOpTimes
     | BinOpDivide
     | BinOpModulo
+    | BinOpShiftLeft
+    | BinOpShiftRight
     | BinOpLess
     | BinOpLessEqual
     | BinOpGreater
@@ -350,6 +352,8 @@ instance Pretty BinOperator where
     pPrint BinOpNotEqual = "="
     pPrint BinOpAnd = "&&"
     pPrint BinOpOr = "||"
+    pPrint BinOpShiftLeft = "<<"
+    pPrint BinOpShiftRight = ">>"
 
 instance Pretty UnOp where
     pPrint unOp = hsep
