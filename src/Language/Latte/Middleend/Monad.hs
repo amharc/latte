@@ -67,6 +67,9 @@ type Reportible r = (AST.HasLocRange r, Pretty r)
 debugState :: MEMonad Doc
 debugState = get >>= pPrintIO
 
+whenNoDiagnostics :: (MonadState s m, HasMiddleEndState s) => m () -> m ()
+whenNoDiagnostics act =  uses meDiagnostics null >>= flip when act
+
 run :: MEMonad () -> IO [Diagnostic]
 run act = views meDiagnostics toList <$> execStateT act MiddleEndState
     { _meNextUnique = 0

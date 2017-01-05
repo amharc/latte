@@ -8,6 +8,7 @@ import qualified Language.Latte.Frontend.AST as P
 import qualified Language.Latte.Frontend.Parser as P
 import qualified Language.Latte.Frontend.GenIR as P
 import qualified Language.Latte.Middleend.Monad as M
+import qualified Language.Latte.Middleend.CheckUnreachability as CheckUnreachability
 import qualified Language.Latte.Middleend.MemToReg as MemToReg
 import qualified Language.Latte.Middleend.SimplifyPhi as SimplifyPhi
 import qualified Language.Latte.Middleend.SimplifyControlFlow as SimplifyControlFlow
@@ -61,7 +62,10 @@ middle program = do
             DeadCodeElimination.opt
             M.debugState >>= liftIO . hPutStrLn stderr . render
 
-        get >>= B.emitState >>= liftIO . flip B.translateOut stdout
+        CheckUnreachability.check
+
+        M.whenNoDiagnostics $
+            get >>= B.emitState >>= liftIO . flip B.translateOut stdout
 
     forM_ diags $ \diag ->
         hPutStrLn stderr . render $ pPrint diag
