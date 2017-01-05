@@ -6,6 +6,7 @@ module Language.Latte.Backend.Asm where
 
 import Control.Lens
 import Data.Data
+import qualified Data.Set as Set
 import Data.ByteString.Char8 as BS
 
 data Register = RSP | RBP | RBX | RCX | RSI | RDI | R8 | R9 | R10 | R11 | R12 | R13 | R14 | R15 | RDX | RAX
@@ -67,6 +68,8 @@ data Instruction
     | QuadInt Int
     | Align Int
     | Call Operand
+    | AnnotateLiveStart (Set.Set Register)
+    | AnnotateLiveStop
     | Leave
     | Ret
 

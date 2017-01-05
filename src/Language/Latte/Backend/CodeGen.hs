@@ -37,6 +37,9 @@ data EmitterState = EmitterState
     , _esSavedRegsStart :: Int
     , _esLockedRegisters :: Set.Set Asm.Register
     , _esLiveAfterPhi :: Map.Map Block (Set.Set Name)
+    , _esLiveAfterBody :: Map.Map Block (Set.Set Name)
+    , _esLiveAfterEnd :: Map.Map Block (Set.Set Name)
+    , _esInFlags :: Maybe (Asm.Flag, Name)
     }
 
 data RegisterState = RSReg | RSMem | RSRegMem | RSNone
@@ -58,7 +61,9 @@ emitFunction :: MonadIO m => Ident -> FunctionDescriptor -> m (Seq.Seq Asm.Instr
 emitFunction functionName desc = do
     blocks <- reachableBlocks entryBlock
     regAlloc <- allocateRegisters blocks
-    liveAfterPhi <- calcLiveAfterPhi blocks
+    liveAfterEnd <- DAE.runDAEBlocks blocks
+    liveAfterPhi <- calcLiveAfterPhi liveAfterEnd
+    liveAfterBody <- calcLiveAfterBody liveAfterEnd
     arguments <- argumentsOfEntryBlock entryBlock
     evalStateT (do
         emit $ Asm.Section ".text"
@@ -77,6 +82,9 @@ emitFunction functionName desc = do
             , _esSavedRegsStart = 16 * ((foldl max (length registerOrder) regAlloc + 1) `div` 2) + 8
             , _esLockedRegisters = Set.empty
             , _esLiveAfterPhi = liveAfterPhi
+            , _esLiveAfterEnd = LV.getLiveVariables <$> liveAfterEnd
+            , _esLiveAfterBody = liveAfterBody
+            , _esInFlags = Nothing
             }
   where
     preprocessLocations i
@@ -85,14 +93,17 @@ emitFunction functionName desc = do
 
     entryBlock = desc ^. funcEntryBlock
 
-calcLiveAfterPhi :: MonadIO m => [Block] -> m (Map.Map Block (Set.Set Name))
-calcLiveAfterPhi blocks = DAE.runDAEBlocks blocks >>= imapM go
-  where
-    go block liveAfter = liftIO $ do
+    calcLiveAfterPhi live = liftIO . iforM live $ \block liveAfter -> do
         end <- readIORef $ block ^. blockEnd
         body <- readIORef $ block ^. blockBody
 
         pure . LV.getLiveVariables $ foldr (flip DAE.stepInstruction) (DAE.stepEnd liveAfter end) body
+
+    calcLiveAfterBody live = liftIO . iforM live $ \block liveAfter -> do
+        end <- readIORef $ block ^. blockEnd
+
+        pure . LV.getLiveVariables $ DAE.stepEnd liveAfter end
+
 
 emitString :: MonadIO m => Ident -> BS.ByteString -> m (Seq.Seq Asm.Instruction)
 emitString ident str = pure
@@ -132,12 +143,15 @@ emit instr = esInstructions %= flip snoc instr
 translateBlock :: (MonadIO m, MonadState EmitterState m) => Block -> m ()
 translateBlock block = do
     emit . Asm.Label $ blockIdent block
+    emit $ Asm.AnnotateLiveStop
 
     esRegisterState . traverse .= RSNone
+    esInFlags .= Nothing
     use (esLiveAfterPhi . at block . singular _Just) >>= mapM_ prepareVar
 
     body <- liftIO . readIORef $ block ^. blockBody
     forM_ body translateInstr
+    use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
 
     liftIO (readIORef $ block ^. blockEnd) >>= \case
         BlockEndNone -> pure ()
@@ -154,17 +168,22 @@ translateBlock block = do
 
             esRegisterState .= regs
         BlockEndBranchCond cond ifTrue ifFalse -> do
-            op <- getAsmOperand cond
-            emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
-            emit $ Asm.JumpCond Asm.FlagEqual (phiBlockIdent block ifFalse)
-            emit $ Asm.Jump (phiBlockIdent block ifTrue)
+            use esInFlags >>= \case
+                Just (flag, name) | OperandNamed name == cond ^. operandPayload ->
+                    emit $ Asm.JumpCond flag (phiBlockIdent block ifTrue)
+                _ -> do
+                    op <- getAsmOperand cond
+                    emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
+                    emit $ Asm.JumpCond Asm.FlagNotEqual (phiBlockIdent block ifTrue)
+
+            emit $ Asm.Jump (phiBlockIdent block ifFalse)
 
             regs <- use esRegisterState
 
-            linkTo ifTrue
+            linkTo ifFalse
             esRegisterState .= regs
 
-            linkTo ifFalse
+            linkTo ifTrue
             esRegisterState .= regs
 
     unlockRegisters
@@ -191,6 +210,12 @@ translateBlock block = do
     prepareVar var = use (esPreferredLocations . at var . singular _Just) >>= \case
         Asm.RSRegister reg -> esRegisterState . at reg ?= RSReg
         _ -> pure ()
+
+    calcLiveRegs = flip foldlM Set.empty $ \acc var -> use (esPreferredLocations . at var . singular _Just) >>= \case
+        Asm.RSRegister reg -> pure $ Set.insert reg acc
+        _ -> pure acc
+
+    annotateLive = calcLiveRegs >=> emit . Asm.AnnotateLiveStart
 
 prologue :: MonadState EmitterState m => m ()
 prologue = do
@@ -272,6 +297,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         argOp <- getAsmOperand arg 
         emit $ Asm.Mov (sizeToMult $ arg ^. operandSize) argOp (Asm.OpRegister reg)
         emit $ Asm.Xor (sizeToMult $ arg ^. operandSize) (Asm.OpImmediate 1) (Asm.OpRegister reg)
+        esInFlags .= Nothing
         writeBack reg name
         unlockRegisters
 
@@ -280,6 +306,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         argOp <- getAsmOperand arg 
         emit $ Asm.Mov (sizeToMult $ arg ^. operandSize) argOp (Asm.OpRegister reg)
         emit $ Asm.Neg (sizeToMult $ arg ^. operandSize) (Asm.OpRegister reg)
+        esInFlags .= Nothing
         writeBack reg name
         unlockRegisters
 
@@ -293,10 +320,12 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (_, Inc var size) -> do
         mem <- translateMemory var
         emit $ Asm.Inc (sizeToMult size) (Asm.OpMemory mem)
+        esInFlags .= Nothing
 
     (_, Dec var size) -> do
         mem <- translateMemory var
         emit $ Asm.Dec (sizeToMult size) (Asm.OpMemory mem)
+        esInFlags .= Nothing
 
     (Just name, IConst arg) -> do
         reg <- lockInRegister name
@@ -315,6 +344,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
 
         rhsOp <- getAsmOperand rhs
         emit $ f (sizeToMult $ rhs ^. operandSize) rhsOp (Asm.OpRegister reg)
+        esInFlags .= Nothing
 
         writeBack reg name
         unlockRegisters
@@ -333,11 +363,12 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         lhsReg <- lockInRegister lhs
         rhsReg <- lockInRegister rhs
         emit $ Asm.Cmp (sizeToMult $ lhs ^. operandSize) (Asm.OpRegister rhsReg) (Asm.OpRegister lhsReg)
+        esInFlags ?= (flag, name)
         unlockRegisters
 
         reg <- lockInRegister name
         emit $ Asm.Set flag (Asm.OpRegister reg)
-        emit $ Asm.Movsbq (Asm.OpRegister reg) (Asm.OpRegister reg)
+        --emit $ Asm.Movsbq (Asm.OpRegister reg) (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
 
@@ -347,6 +378,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         op <- translateMemory target
         lockRegister Asm.RAX
         emit $ Asm.Call (Asm.OpMemory op)
+        esInFlags .= Nothing
         unlockRegisters
 
 translateMemory :: MonadState EmitterState m => Memory -> m Asm.Memory

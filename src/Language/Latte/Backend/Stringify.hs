@@ -179,6 +179,8 @@ instance Trans Instruction where
         escape c = BS.singleton c
     trans (Push mult op) = sbs "\tpush" <> suffix mult <> " " <> transMult mult op
     trans (Pop mult op) = sbs "\tpop" <> suffix mult <> " " <> transMult mult op
+    trans (AnnotateLiveStart regs) = sbs "#live registers analysis start: " <> foldMap (\reg -> trans reg <> sbs " ") regs
+    trans AnnotateLiveStop = sbs "#live registers analysis stop"
 
 sbs :: BSShort.ShortByteString -> BS.Builder
 sbs = BS.shortByteString
