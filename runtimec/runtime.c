@@ -4,10 +4,12 @@
 
 void _function_8_printInt(int i) {
     printf("%d\n", i);
+    fflush(stdout);
 }
 
 void _function_11_printString(char *str) {
     puts(str);
+    fflush(stdout);
 }
 
 char *concat(char *lhs, char *rhs) {

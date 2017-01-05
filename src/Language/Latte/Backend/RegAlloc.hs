@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Backend.RegAlloc where
@@ -16,6 +17,8 @@ import qualified Data.Sequence as Seq
 import Language.Latte.Middleend.IR
 import qualified Language.Latte.Middleend.DeadCodeElimination as DCE
 import qualified Language.Latte.Middleend.DataflowAnalysisEngine as DAE
+import Text.PrettyPrint
+import Text.PrettyPrint.HughesPJClass
 
 newtype InterferenceGraph = InterferenceGraph { _getInterferenceGraph :: Map.Map Name (Set.Set Name) }
 
@@ -101,3 +104,8 @@ greedyColouring graph = foldl go Map.empty
         neighbours = graph ^. getInterferenceGraph . at name . non Set.empty
         neighboursColours = Set.map (`Map.lookup` acc) neighbours
         colour = head [i | i <- [0..], not $ Just i `Set.member` neighboursColours]
+
+instance Pretty InterferenceGraph where
+    pPrint (InterferenceGraph graph) = foldr ($+$) empty $ map go $ Map.toList graph
+      where
+        go (name, others) = pPrint name <+> " conflicts with: " <+> hsep (map pPrint $ toList others)

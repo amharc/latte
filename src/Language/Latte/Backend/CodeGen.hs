@@ -311,9 +311,11 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (Nothing, Store to size (Operand (OperandInt i) _)) -> do
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpImmediate i) (Asm.OpMemory mem)
+        unlockRegisters
     (Nothing, Store to size (Operand (OperandSize sz) _)) -> do
         mem <- translateMemory to
         emit $ Asm.Mov (sizeToMult size) (Asm.OpImmediate $ sizeToInt sz) (Asm.OpMemory mem)
+        unlockRegisters
     (_, Store to size value) -> do
         reg <- lockInRegister value
         mem <- translateMemory to
@@ -393,11 +395,13 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         mem <- translateMemory var
         emit $ Asm.Inc (sizeToMult size) (Asm.OpMemory mem)
         esInFlags .= Nothing
+        unlockRegisters
 
     (_, Dec var size) -> do
         mem <- translateMemory var
         emit $ Asm.Dec (sizeToMult size) (Asm.OpMemory mem)
         esInFlags .= Nothing
+        unlockRegisters
 
     (Just name, IConst arg) -> do
         reg <- lockInRegister name
@@ -422,6 +426,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         unlockRegisters
 
     divide lhs rhs = do
+        clobberRegister Asm.RDX
         lockRegister Asm.RDX
         safeLockInGivenRegister lhs Asm.RAX 
         emit $ Asm.Cqto
@@ -492,7 +497,7 @@ registerOrder =
 memoryOfRegister :: Asm.Register -> Asm.Memory
 memoryOfRegister = (map Map.!)
   where
-    map = Map.fromList $ [(reg, Asm.Memory Asm.RBP Nothing (-8 * i - 8)) | (reg, i) <- zip registerOrder [2..]]
+    map = Map.fromList $ [(reg, Asm.Memory Asm.RBP Nothing (-8 * i)) | (reg, i) <- zip registerOrder [1..]]
 
 memoryOfSpill :: Int -> Asm.Memory
 memoryOfSpill i = Asm.Memory Asm.RBP Nothing (-8 * (i + length registerOrder) - 8)
@@ -536,7 +541,7 @@ class LockInRegister a where
 
     safeLockInGivenRegister :: MonadState EmitterState m => a -> Asm.Register -> m ()
     safeLockInGivenRegister x reg = do
-        saveRegister reg
+        clobberRegister reg
         lockInGivenRegister x reg
 
     lockInRegister :: MonadState EmitterState m => a -> m Asm.Register
@@ -547,12 +552,12 @@ class LockInRegister a where
 
 instance LockInRegister Name where
     lockInGivenRegister name reg = use (esPreferredLocations . at name . singular _Just) >>= \case
-        Asm.RSSpill i -> do
-            emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfSpill i) (Asm.OpRegister reg)
-        Asm.RSRegister reg' -> use (esRegisterState . at reg') >>= \case
-            Just RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
-            Just _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
-            Nothing -> fail "No register state for register"
+            Asm.RSSpill i -> do
+                emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfSpill i) (Asm.OpRegister reg)
+            Asm.RSRegister reg' -> use (esRegisterState . at reg') >>= \case
+                Just RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
+                Just _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
+                Nothing -> fail "No register state for register"
 
     lockInRegister name = use (esPreferredLocations . at name . singular _Just) >>= \case
         Asm.RSSpill _ -> do
