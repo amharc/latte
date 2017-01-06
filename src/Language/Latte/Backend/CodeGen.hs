@@ -478,16 +478,16 @@ translateMemory (MemoryArgument i)
   where
     regs :: [Asm.Register]
     regs = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
-translateMemory (MemoryOffset base _ Size0) = do
+translateMemory (MemoryOffset base _ Size0 disp) = do
     baseReg <- lockInRegister base
-    pure $ Asm.Memory baseReg Nothing 0
-translateMemory (MemoryOffset base (Operand (OperandInt index) _) size) = do
+    pure $ Asm.Memory baseReg Nothing disp
+translateMemory (MemoryOffset base (Operand (OperandInt index) _) size disp) = do
     baseReg <- lockInRegister base
-    pure $ Asm.Memory baseReg Nothing (index * sizeToInt size)
-translateMemory (MemoryOffset base index size) = do
+    pure $ Asm.Memory baseReg Nothing (index * sizeToInt size + disp)
+translateMemory (MemoryOffset base index size disp) = do
     baseReg <- lockInRegister base
     indexReg <- lockInRegister index
-    pure $ Asm.Memory baseReg (Just (indexReg, mult)) 0
+    pure $ Asm.Memory baseReg (Just (indexReg, mult)) disp
   where
     mult = case size of
         Size0 -> error "unreachable"

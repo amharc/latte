@@ -66,13 +66,13 @@ data Name = Name
 data Memory
     = MemoryLocal {-# UNPACK #-} Int
     | MemoryArgument {-# UNPACK #-} Int
-    | MemoryOffset Operand Operand Size
+    | MemoryOffset Operand Operand Size Int
     | MemoryGlobal Ident
     | MemoryUndef
     deriving (Eq, Show)
 
 pattern MemoryPointer :: Operand -> Memory
-pattern MemoryPointer ptr = MemoryOffset ptr (Operand (OperandInt 0) SizePtr) SizePtr
+pattern MemoryPointer ptr = MemoryOffset ptr (Operand (OperandInt 0) SizePtr) SizePtr 0
 
 data Size = Size0 | Size8 | Size32 | Size64 | SizePtr
     deriving (Eq, Ord, Show)
@@ -304,7 +304,7 @@ instance Pretty Name where
 instance Pretty Memory where
     pPrint (MemoryLocal i) = "local" <+> int i
     pPrint (MemoryArgument i) = "argument" <+> int i
-    pPrint (MemoryOffset mem i sz) = pPrint mem <+> "+" <+> pPrint i <+> "*" <+> pPrint sz
+    pPrint (MemoryOffset mem i sz disp) = pPrint mem <+> "+" <+> pPrint i <+> "*" <+> pPrint sz <+> "+" <+> int disp
     pPrint (MemoryGlobal i) = "global" <+> pPrint i
     pPrint MemoryUndef = "undef"
 
@@ -504,7 +504,7 @@ instance HasOperands Operand where
     operands = id
 
 instance HasOperands Memory where
-    operands f (MemoryOffset base idx sz) = MemoryOffset <$> operands f base <*> operands f idx <*> pure sz
+    operands f (MemoryOffset base idx sz disp) = MemoryOffset <$> operands f base <*> operands f idx <*> pure sz <*> pure disp
     operands _ o = pure o
 
 instance HasOperands BlockEnd where

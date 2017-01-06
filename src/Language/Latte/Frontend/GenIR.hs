@@ -386,7 +386,7 @@ transExpr ex@(AST.Located l (AST.ExprNewArr ty lenExpr)) = do
     sizeOpWithField <- flip Operand (sizeOf AST.TyInt) . OperandNamed <$>
         emitInstr Nothing (BinOp sizeOperand BinOpPlus (Operand (OperandSize Size32) (sizeOf AST.TyInt))) l []
     val <- emitInstr Nothing (IIntristic (IntristicAlloc sizeOpWithField objectType)) l [InstrComment $ pPrint ex]
-    _ <- emitInstr Nothing (Store (MemoryOffset (Operand (OperandNamed val) SizePtr) (Operand (OperandInt 0) Size32) SizePtr) Size32 lenOperand) l []
+    _ <- emitInstr Nothing (Store (MemoryPointer (Operand (OperandNamed val) SizePtr)) Size32 lenOperand) l []
     pure (AST.TyArray ty, Operand (OperandNamed val) SizePtr)
   where
     objectType = case ty of
@@ -414,7 +414,7 @@ transLval lval@(AST.Located l (AST.LvalVar ident)) =
                 pure (AST.TyInt, MemoryUndef)
             Just field -> do
                 this <- flip Operand SizePtr . OperandNamed <$> emitInstr Nothing (Load (MemoryArgument 0) SizePtr) l []
-                pure (field ^. classFieldType, MemoryOffset this (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr)
+                pure (field ^. classFieldType, MemoryOffset this (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr 0)
         Just var -> do
             pure (var ^. varType, memoryOfVariable $ var ^. varLoc)
 transLval lval@(AST.Located l AST.LvalThis) =
@@ -429,9 +429,7 @@ transLval lval@(AST.Located l (AST.LvalArray arrExpr idxExpr)) = do
     operandIdx <- transExprTypeEqual AST.TyInt idxExpr
     case tyArr of
         AST.TyArray ty -> do
-            arrData <- flip Operand SizePtr . OperandNamed <$> emitInstr Nothing
-                (GetAddr $ MemoryOffset operandArr (Operand (OperandInt 1) Size32) Size32) l [InstrComment "skip length field"]
-            pure (ty, MemoryOffset arrData operandIdx (sizeOf ty))
+            pure (ty, MemoryOffset operandArr operandIdx (sizeOf ty) 4)
         ty -> do
             simpleError lval $ "Not an array: " <+> pPrint ty
             pure (AST.TyInt, MemoryUndef)
@@ -444,7 +442,7 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
                     simpleError lval $ pPrint className <+> "has no field" <+> pPrint field
                     pure (AST.TyInt, MemoryLocal 0)
                 Just field ->
-                    pure (field ^. classFieldType, MemoryOffset operandObj (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr)
+                    pure (field ^. classFieldType, MemoryOffset operandObj (Operand (OperandInt $ field ^. classFieldId) Size32) SizePtr 0)
         {-AST.TyString -> do
             unless (field == "length") . simpleError lval $ "string has no field" <+> pPrint field
             pure $ lengthField operandObj
@@ -456,7 +454,7 @@ transLval lval@(AST.Located _ (AST.LvalField objExpr field)) = do
             simpleError lval $ pPrint tyObj <+> "has no fields"
             pure $ lengthField operandObj
   where
-    lengthField operandObj = (AST.TyInt, MemoryOffset operandObj (Operand (OperandInt 0) Size32) SizePtr)
+    lengthField operandObj = (AST.TyInt, MemoryPointer operandObj)
 
 transFunCall :: GIRMonad m => AST.Located AST.Lval -> m (Maybe (Memory, Maybe Operand, FuncInfo))
 transFunCall (AST.Located l (AST.LvalVar name)) = view (girFunctions . at name) >>= \case
@@ -487,9 +485,9 @@ transFunCall lval = do
 
 virtualFuncAddr :: GIRMonad m => AST.LocRange -> Operand -> Int -> m Memory
 virtualFuncAddr l obj idx = do
-    vtablePtr <- flip Operand SizePtr . OperandNamed <$> emitInstr (Just "vtable") (Load (MemoryOffset obj (Operand (OperandInt 0) Size32) SizePtr) SizePtr)
+    vtablePtr <- flip Operand SizePtr . OperandNamed <$> emitInstr (Just "vtable") (Load (MemoryPointer obj) SizePtr)
         l [InstrComment "load vtable ptr", InstrInvariant]
-    pure $ MemoryOffset vtablePtr (Operand (OperandInt idx) Size32) SizePtr
+    pure $ MemoryOffset vtablePtr (Operand (OperandInt idx) Size32) SizePtr 0
 
 transFuncDecl :: GIRMonad m => Maybe AST.Ident -> AST.Located AST.FuncDecl -> m ()
 transFuncDecl mClass locDecl@(AST.Located l decl) = do
