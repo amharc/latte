@@ -30,6 +30,7 @@ library
                        Language.Latte.Middleend.DeadCodeElimination
                        Language.Latte.Middleend.StrengthReduction
                        Language.Latte.Middleend.CheckUnreachability
+                       Language.Latte.Middleend.TailCalls
                        Language.Latte.Backend.RegAlloc
                        Language.Latte.Backend.Asm
                        Language.Latte.Backend.CodeGen

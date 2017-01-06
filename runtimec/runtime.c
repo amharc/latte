@@ -29,6 +29,8 @@ char *_function_10_readString(void) {
     char *ret;
     size_t n = 0;
 
+    scanf(" ");
+
     getline(&ret, &n, stdin);
 
     ret[strlen(ret) - 1] = 0;

@@ -155,10 +155,11 @@ instance Trans Instruction where
     trans (Movsbq lhs rhs) = sbs "\tmovsbq " <> transMult Mult1 lhs <> ", " <> transMult Mult8 rhs
     trans (Test mult lhs rhs) = sbs "\ttest" <> suffix mult <> " " <> transMult mult lhs <> ", " <> transMult mult rhs
     trans Cqto = sbs "\tcqto"
-    trans (Inc mult op) = sbs "\tinc" <> suffix mult <> sbs " " <> trans op
-    trans (Dec mult op) = sbs "\tdec" <> suffix mult <> sbs " " <> trans op
+    trans (Inc mult op) = sbs "\tinc" <> suffix mult <> sbs " " <> transMult mult op
+    trans (Dec mult op) = sbs "\tdec" <> suffix mult <> sbs " " <> transMult mult op
     trans (JumpCond flag ident) = sbs "\tj" <> trans flag <> sbs " " <> trans ident
-    trans (Jump ident) = sbs "\tjmp " <> trans ident
+    trans (Jump (OpMemory (Global ident))) = sbs "\tjmp " <> trans ident
+    trans (Jump op) = sbs "\tjmp *" <> trans op
     trans (GlobalFunc ident) = sbs ".global " <> trans ident
     trans (Call (OpMemory (Global ident))) = sbs "\tcall " <> trans ident
     trans (Call op) = sbs "\tcall *" <> trans op

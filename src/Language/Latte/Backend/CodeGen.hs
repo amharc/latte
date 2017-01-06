@@ -173,7 +173,7 @@ translateBlock block = do
             regs <- use esRegisterState
 
             use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
-            emit $ Asm.Jump targetLabel
+            emit . Asm.Jump . Asm.OpMemory $ Asm.Global targetLabel
             targetLabel' <- linkTo target
 
             esRegisterState .= regs
@@ -189,7 +189,7 @@ translateBlock block = do
                     emit $ Asm.JumpCond Asm.FlagNotEqual trueLabel
                     use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
 
-            emit $ Asm.Jump falseLabel
+            emit . Asm.Jump . Asm.OpMemory $ Asm.Global falseLabel
 
             regs <- use esRegisterState
 
@@ -200,6 +200,19 @@ translateBlock block = do
             esRegisterState .= regs
 
             pure (trueLabel', falseLabel')
+        BlockEndTailCall (SCall dest@(MemoryGlobal _) args) | length args < 7 -> do
+            use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
+            zipWithM_ safeLockInGivenRegister args [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
+            forM_ (reverse tailCallSavedRegs) $ \reg -> do
+                emit . Asm.Pop Asm.Mult8 $ Asm.OpRegister reg
+                lockRegister reg
+            op <- translateMemory dest
+            emit $ Asm.Leave
+            emit $ Asm.Jump (Asm.OpMemory op)
+        BlockEndTailCall call -> do
+            use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
+            translateInstr $ Instruction Nothing (ICall call) []
+            epilogue
 
     unlockRegisters
   where
@@ -220,7 +233,7 @@ translateBlock block = do
                 parallelMove moves
 
                 use (esLiveAfterPhi . at target . singular _Just) >>= mapM_ restoreVar
-                emit . Asm.Jump $ blockIdent target
+                emit . Asm.Jump . Asm.OpMemory . Asm.Global $ blockIdent target
                 pure $ phiBlockIdent block target
 
     restoreVar var = use (esPreferredLocations . at var . singular _Just) >>= \case
@@ -312,7 +325,10 @@ epilogue = do
     emit Asm.Ret
 
 savedRegs :: [Asm.Register]
-savedRegs = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9, Asm.RBX, Asm.R12, Asm.R13, Asm.R14, Asm.R15]
+savedRegs = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9] ++ tailCallSavedRegs
+
+tailCallSavedRegs :: [Asm.Register]
+tailCallSavedRegs = [Asm.RBX, Asm.R12, Asm.R13, Asm.R14, Asm.R15]
 
 translateInstr :: MonadState EmitterState m => Instruction -> m ()
 translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of

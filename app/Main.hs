@@ -15,6 +15,7 @@ import qualified Language.Latte.Middleend.ShrinkEnds as ShrinkEnds
 import qualified Language.Latte.Middleend.Propagate as Propagate
 import qualified Language.Latte.Middleend.DeadCodeElimination as DeadCodeElimination
 import qualified Language.Latte.Middleend.StrengthReduction as StrengthReduction
+import qualified Language.Latte.Middleend.TailCalls as TailCalls
 import qualified Language.Latte.Middleend.Fixed as Fixed
 import qualified Language.Latte.Backend.CodeGen as B
 import qualified Language.Latte.Backend.Stringify as B
@@ -61,6 +62,10 @@ middle program = do
             liftIO $ hPutStr stderr "\n\nRemove dead code\n\n"
             DeadCodeElimination.opt
             M.debugState >>= liftIO . hPutStrLn stderr . render
+
+        liftIO $ hPutStrLn stderr "\n\nTail calls\n\n"
+        TailCalls.opt
+        M.debugState >>= liftIO . hPutStrLn stderr . render 
 
         CheckUnreachability.check
 

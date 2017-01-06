@@ -24,7 +24,7 @@ data Memory
         , _memIndex :: Maybe (Register, Multiplier)
         , _memDisplacement :: {-# UNPACK #-} Int
         }
-    | Global Ident
+    | Global ~Ident
     deriving (Eq, Show, Data, Typeable)
 
 data Multiplier = Mult1 | Mult2 | Mult4 | Mult8
@@ -57,7 +57,7 @@ data Instruction
     | Cqto
     | Inc Multiplier Operand
     | Dec Multiplier Operand
-    | Jump ~Ident
+    | Jump Operand
     | JumpCond Flag ~Ident
     | Label Ident
     | GlobalFunc Ident

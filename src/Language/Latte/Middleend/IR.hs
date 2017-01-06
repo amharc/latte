@@ -127,6 +127,7 @@ data BlockEnd
     | BlockEndBranchCond Operand Block Block
     | BlockEndReturn Operand
     | BlockEndReturnVoid
+    | BlockEndTailCall Call
     | BlockEndNone
     deriving Eq
 
@@ -426,6 +427,7 @@ instance Pretty BlockEnd where
         , pPrint targetFalse
         ]
     pPrint (BlockEndReturn ret) = "return" <+> pPrint ret
+    pPrint (BlockEndTailCall call) = "tail" <+> pPrint call
     pPrint BlockEndReturnVoid = "return"
     pPrint BlockEndNone = "must be unreachable"
 
@@ -473,6 +475,7 @@ successors block = liftIO $ readIORef (block ^. blockEnd) >>= \case
     BlockEndNone -> pure []
     BlockEndBranch target -> pure [target]
     BlockEndBranchCond _ ifTrue ifFalse -> pure [ifFalse, ifTrue]
+    BlockEndTailCall _ -> pure []
     BlockEndReturn _ -> pure []
     BlockEndReturnVoid -> pure []
 
@@ -510,6 +513,7 @@ instance HasOperands Memory where
 instance HasOperands BlockEnd where
     operands f (BlockEndBranchCond cond true false) = BlockEndBranchCond <$> operands f cond <*> pure true <*> pure false
     operands f (BlockEndReturn ret) = BlockEndReturn <$> operands f ret
+    operands f (BlockEndTailCall call) = BlockEndTailCall <$> operands f call
     operands _ o = pure o
 
 instance HasOperands PhiBranch where

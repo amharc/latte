@@ -16,7 +16,7 @@ forward :: Seq.Seq Instruction -> Seq.Seq Instruction
 forward seq = case Seq.viewl seq of
     Seq.EmptyL -> Seq.empty
     Mov _ op op' Seq.:< instrs | op == op' -> forward instrs
-    Jump label Seq.:< instrs@(Seq.viewl -> Label label' Seq.:< _) | label == label' -> forward instrs
+    Jump (OpMemory (Global label)) Seq.:< instrs@(Seq.viewl -> Label label' Seq.:< _) | label == label' -> forward instrs
     Mov m0 (OpRegister r1) (OpRegister r2) Seq.:< (Seq.viewl -> Add m1 (OpRegister r3) (OpRegister r4) Seq.:< instrs)
         | r2 == r4 && m0 == m1 -> forward $ Lea m0 (OpMemory (Memory r1 (Just (r3, Mult1)) 0)) (OpRegister r2) Seq.<| instrs
     Mov _ (OpImmediate i1) (OpRegister r2) Seq.:< (Seq.viewl -> Add m (OpRegister r3) (OpRegister r4) Seq.:< instrs)
