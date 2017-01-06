@@ -57,8 +57,8 @@ data Instruction
     | Cqto
     | Inc Multiplier Operand
     | Dec Multiplier Operand
-    | Jump Ident
-    | JumpCond Flag Ident
+    | Jump ~Ident
+    | JumpCond Flag ~Ident
     | Label Ident
     | GlobalFunc Ident
     | Section BS.ByteString

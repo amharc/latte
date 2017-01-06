@@ -9,6 +9,7 @@
 module Language.Latte.Backend.CodeGen (emitState, sizeToInt) where
 
 import Control.Lens
+import Control.Monad.Fix
 import Control.Monad.IO.Class
 import Control.Monad.State
 import qualified Data.ByteString.Char8 as BS
@@ -54,7 +55,7 @@ makeLenses ''EmitterState
 makePrisms ''RegisterState
 makeLenses ''ParallelMoveState
 
-emitState :: MonadIO m => MiddleEndState -> m (Seq.Seq Asm.Instruction)
+emitState :: (MonadIO m, MonadFix m) => MiddleEndState -> m (Seq.Seq Asm.Instruction)
 emitState st = do
     funcs <- fold <$> itraverse emitFunction (st ^. meFunctions)
     strgs <- fold <$> itraverse emitString (st ^. meStrings)
@@ -64,7 +65,7 @@ emitState st = do
 -- |Emits a function
 --
 -- Precondition: valid SSA, mem2reg applied
-emitFunction :: MonadIO m => Ident -> FunctionDescriptor -> m (Seq.Seq Asm.Instruction)
+emitFunction :: (MonadIO m, MonadFix m) => Ident -> FunctionDescriptor -> m (Seq.Seq Asm.Instruction)
 emitFunction functionName desc = do
     blocks <- reachableBlocks entryBlock
     regAlloc <- allocateRegisters blocks
@@ -147,7 +148,7 @@ argumentsOfEntryBlock entryBlock = do
 emit :: MonadState EmitterState m => Asm.Instruction -> m ()
 emit instr = esInstructions %= flip snoc instr
 
-translateBlock :: (MonadIO m, MonadState EmitterState m) => Block -> m ()
+translateBlock :: (MonadIO m, MonadFix m, MonadState EmitterState m) => Block -> m ()
 translateBlock block = do
     emit . Asm.Label $ blockIdent block
     emit $ Asm.AnnotateLiveStop
@@ -168,34 +169,37 @@ translateBlock block = do
         BlockEndReturnVoid -> do
             use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
             epilogue
-        BlockEndBranch target -> do
+        BlockEndBranch target -> void . mfix $ \targetLabel -> do
             regs <- use esRegisterState
 
             use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
-            emit $ Asm.Jump (phiBlockIdent block target)
-            linkTo target
+            emit $ Asm.Jump targetLabel
+            targetLabel' <- linkTo target
 
             esRegisterState .= regs
-        BlockEndBranchCond cond ifTrue ifFalse -> do
+            pure targetLabel'
+        BlockEndBranchCond cond ifTrue ifFalse -> void . mfix $ \(~(trueLabel, falseLabel)) -> do
             use esInFlags >>= \case
                 Just (flag, name) | OperandNamed name == cond ^. operandPayload -> do
-                    emit $ Asm.JumpCond flag (phiBlockIdent block ifTrue)
+                    emit $ Asm.JumpCond flag trueLabel
                     use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
                 _ -> do
                     op <- getAsmOperand cond
                     emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
-                    emit $ Asm.JumpCond Asm.FlagNotEqual (phiBlockIdent block ifTrue)
+                    emit $ Asm.JumpCond Asm.FlagNotEqual trueLabel
                     use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
 
-            emit $ Asm.Jump (phiBlockIdent block ifFalse)
+            emit $ Asm.Jump falseLabel
 
             regs <- use esRegisterState
 
-            linkTo ifFalse
+            falseLabel' <- linkTo ifFalse
             esRegisterState .= regs
 
-            linkTo ifTrue
+            trueLabel' <- linkTo ifTrue
             esRegisterState .= regs
+
+            pure (trueLabel', falseLabel')
 
     unlockRegisters
   where
@@ -208,14 +212,20 @@ translateBlock block = do
                 when (branch ^. phiFrom == block) $ do
                     modify $ cons (branch ^. phiValue, phi ^. name)
 
-        parallelMove moves
+        restored <- uses (esLiveAfterPhi . at target . singular _Just) toList >>= mapM restoreVar
 
-        use (esLiveAfterPhi . at target . singular _Just) >>= mapM_ restoreVar
-        emit . Asm.Jump $ blockIdent target
+        if null moves && not (any id restored)
+            then pure $ blockIdent target
+            else do
+                parallelMove moves
+
+                use (esLiveAfterPhi . at target . singular _Just) >>= mapM_ restoreVar
+                emit . Asm.Jump $ blockIdent target
+                pure $ phiBlockIdent block target
 
     restoreVar var = use (esPreferredLocations . at var . singular _Just) >>= \case
-        Asm.RSRegister reg -> restoreRegister reg
-        _ -> pure ()
+        Asm.RSRegister reg -> restoreRegister reg >> pure True
+        _ -> pure False
 
     prepareVar var = use (esPreferredLocations . at var . singular _Just) >>= \case
         Asm.RSRegister reg -> esRegisterState . at reg ?= RSReg

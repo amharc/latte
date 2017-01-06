@@ -1,3 +1,4 @@
+{-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Backend.Peephole(opt) where
 
@@ -15,6 +16,7 @@ forward :: Seq.Seq Instruction -> Seq.Seq Instruction
 forward seq = case Seq.viewl seq of
     Seq.EmptyL -> Seq.empty
     Mov _ op op' Seq.:< instrs | op == op' -> forward instrs
+    Jump label Seq.:< instrs@(Seq.viewl -> Label label' Seq.:< _) | label == label' -> forward instrs
     i Seq.:< instrs -> i Seq.<| forward instrs
 
 type Acc = (Seq.Seq Instruction, Maybe (Set.Set Register))
