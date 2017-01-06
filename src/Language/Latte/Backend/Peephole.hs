@@ -17,6 +17,17 @@ forward seq = case Seq.viewl seq of
     Seq.EmptyL -> Seq.empty
     Mov _ op op' Seq.:< instrs | op == op' -> forward instrs
     Jump label Seq.:< instrs@(Seq.viewl -> Label label' Seq.:< _) | label == label' -> forward instrs
+    Mov m0 (OpRegister r1) (OpRegister r2) Seq.:< (Seq.viewl -> Add m1 (OpRegister r3) (OpRegister r4) Seq.:< instrs)
+        | r2 == r4 && m0 == m1 -> forward $ Lea m0 (OpMemory (Memory r1 (Just (r3, Mult1)) 0)) (OpRegister r2) Seq.<| instrs
+    Mov _ (OpImmediate i1) (OpRegister r2) Seq.:< (Seq.viewl -> Add m (OpRegister r3) (OpRegister r4) Seq.:< instrs)
+        | r2 == r4 -> forward $ Lea m (OpMemory (Memory r3 Nothing i1)) (OpRegister r2) Seq.<| instrs
+    Mov m (OpRegister r1) (OpRegister r2) Seq.:< (Seq.viewl -> Add _ (OpImmediate i3) (OpRegister r4) Seq.:< instrs)
+        | r2 == r4 -> forward $ Lea m (OpMemory (Memory r1 Nothing i3)) (OpRegister r2) Seq.<| instrs
+    Mov m0 (OpImmediate 0) (OpRegister r) Seq.:< instrs -> forward $ Xor m0 (OpRegister r) (OpRegister r) Seq.<| instrs
+    Add m0 (OpImmediate 1) op Seq.:< instrs -> forward $ Inc m0 op Seq.<| instrs
+    Sub m0 (OpImmediate 1) op Seq.:< instrs -> forward $ Dec m0 op Seq.<| instrs
+    Add m0 (OpImmediate (-1)) op Seq.:< instrs -> forward $ Dec m0 op Seq.<| instrs
+    Sub m0 (OpImmediate (-1)) op Seq.:< instrs -> forward $ Inc m0 op Seq.<| instrs
     i Seq.:< instrs -> i Seq.<| forward instrs
 
 type Acc = (Seq.Seq Instruction, Maybe (Set.Set Register))

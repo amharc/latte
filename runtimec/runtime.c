@@ -21,7 +21,7 @@ char *concat(char *lhs, char *rhs) {
 
 int _function_7_readInt(void) {
     int i;
-    scanf(" %d ", &i);
+    scanf("%d", &i);
     return i;
 }
 
