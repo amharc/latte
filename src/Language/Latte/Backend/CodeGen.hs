@@ -200,12 +200,12 @@ translateBlock block = do
             esRegisterState .= regs
 
             pure (trueLabel', falseLabel')
-        BlockEndTailCall (SCall dest@(MemoryGlobal _) args) | length args < 7 -> do
+        BlockEndTailCall (SCall dest args) | length args < 7 -> do
             use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
             zipWithM_ safeLockInGivenRegister args [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
             forM_ (reverse tailCallSavedRegs) $ \reg -> do
-                emit . Asm.Pop Asm.Mult8 $ Asm.OpRegister reg
                 lockRegister reg
+                emit . Asm.Pop Asm.Mult8 $ Asm.OpRegister reg
             op <- translateMemory dest
             emit $ Asm.Leave
             emit $ Asm.Jump (Asm.OpMemory op)
