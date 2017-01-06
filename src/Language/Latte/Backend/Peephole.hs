@@ -93,7 +93,9 @@ backward instr old@(instrs, live) = case instr of
     kills (Pop _ (OpRegister dst)) = allRegs [RSP, dst]
     kills (Pop _ _) = allRegs [RSP]
     kills (Call _) = allRegs [RAX, RCX, RDX, RSI, RDI, R8, R9, R10, R11]
+    kills (Set _ (OpRegister dst)) = allRegs [dst]
     kills Leave = allRegs [RBP, RSP]
+    kills (Test _ _ _) = allRegs [RFLAGS]
     kills _ = Set.empty
 
     protected :: Instruction -> Bool
@@ -110,6 +112,8 @@ backward instr old@(instrs, live) = case instr of
     protected (Sal _ _ (OpMemory _)) = True
     protected (Sar _ _ (OpMemory _)) = True
     protected (Neg _ (OpMemory _)) = True
+    protected (Inc _ (OpMemory _)) = True
+    protected (Dec _ (OpMemory _)) = True
     protected (Push _ _) = True
     protected (Pop _ _) = True
     protected (Jump _) = True

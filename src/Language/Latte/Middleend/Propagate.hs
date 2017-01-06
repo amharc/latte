@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
-module Language.Latte.Middleend.Propagate (opt) where
+module Language.Latte.Middleend.Propagate (opt, isInt) where
 
 import Control.Lens
 import Control.Monad.IO.Class

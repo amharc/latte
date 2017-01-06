@@ -179,13 +179,13 @@ translateBlock block = do
         BlockEndBranchCond cond ifTrue ifFalse -> do
             use esInFlags >>= \case
                 Just (flag, name) | OperandNamed name == cond ^. operandPayload -> do
-                    use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
                     emit $ Asm.JumpCond flag (phiBlockIdent block ifTrue)
+                    use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
                 _ -> do
-                    use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
                     op <- getAsmOperand cond
                     emit $ Asm.Test Asm.Mult1 (Asm.OpImmediate 1) op
                     emit $ Asm.JumpCond Asm.FlagNotEqual (phiBlockIdent block ifTrue)
+                    use (esLiveAfterEnd . at block . singular _Just) >>= annotateLive
 
             emit $ Asm.Jump (phiBlockIdent block ifFalse)
 
@@ -259,18 +259,18 @@ parallelMove pairs = evalStateT (go remaining0 >> cycles) st0
 
     cycles = uses pmsIncoming Map.minViewWithKey >>= \case
         Nothing -> pure ()
-        Just ((start, Operand (OperandNamed prev) _), _) -> do
-            emitSwap start prev
-            pmsIncoming . at start .= Nothing
-            cycle start prev
+        Just ((start, _), _) -> do
+            cycle start start
             cycles
 
-    cycle start cur | start == cur = pure ()
     cycle start cur = use (pmsIncoming . at cur) >>= \case
-        Just (Operand (OperandNamed prev) _) -> do
-            emitSwap cur prev
-            pmsIncoming . at cur .= Nothing
-            cycle start prev
+        Just (Operand (OperandNamed prev) _)
+            | prev == start -> 
+                pmsIncoming . at cur .= Nothing
+            | otherwise -> do
+                emitSwap cur prev
+                pmsIncoming . at cur .= Nothing
+                cycle start prev
         x -> error $ show x
 
     emitSwap lhs rhs = lift $ do

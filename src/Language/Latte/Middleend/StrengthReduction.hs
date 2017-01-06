@@ -11,6 +11,7 @@ import Data.Bits
 import Data.IORef
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
+import qualified Language.Latte.Middleend.Propagate as Propagate
 
 opt :: (MonadIO m, MonadState s m, HasMiddleEndState s) => m ()
 opt = use meFunctions >>= mapM_ runFunction
@@ -32,7 +33,7 @@ runInstruction (BinOp MinusOne BinOpTimes rhs) = UnOp UnOpNeg rhs
 runInstruction payload = payload
 
 pattern OpPow2 :: Int -> Operand
-pattern OpPow2 i <- Operand (OperandInt (ilog2 -> Just i)) _
+pattern OpPow2 i <- (Propagate.isInt >=> ilog2 -> Just i)
 
 pattern MinusOne :: Operand
 pattern MinusOne <- Operand (OperandInt (-1)) _

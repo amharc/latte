@@ -65,9 +65,9 @@ middle program = do
         CheckUnreachability.check
 
         M.whenNoDiagnostics $ do
-            asm <-get >>= B.emitState
-            liftIO $ B.translateOut asm stdout
-            --liftIO $ B.translateOut (Peephole.opt asm) stderr
+            asm <- get >>= B.emitState
+            liftIO $ withFile "pre.s" WriteMode $ B.translateOut asm
+            liftIO $ withFile "asm.s" WriteMode $ B.translateOut (Peephole.opt asm)
 
     forM_ diags $ \diag ->
         hPutStrLn stderr . render $ pPrint diag
