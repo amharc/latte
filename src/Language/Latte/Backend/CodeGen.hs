@@ -304,8 +304,8 @@ parallelMove pairs = evalStateT (go remaining0 >> cycles) st0
         unlockRegisters
 
     emitSimpleMove from to = lift $ do
-        reg <- lockInRegister to
         op <- getAsmOperand from
+        reg <- getUnsafeLockedOutputRegisterFor to
         emit $ Asm.Mov Asm.Mult8 op (Asm.OpRegister reg)
         writeBack reg to
         unlockRegisters

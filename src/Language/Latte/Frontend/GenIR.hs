@@ -241,7 +241,9 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
             Just expr -> transExpr expr
             Nothing -> case expectedType of
                 AST.TyString -> do
-                    emptyStr <- emitInstr (Just "emptyString") (GetAddr $ MemoryGlobal "LATC_emptyString") li []
+                    name <- mkName $ Just "emptyString"
+                    internString (mangleString name) ""
+                    emptyStr <- emitInstr Nothing (GetAddr . MemoryGlobal $ mangleString name) l [InstrComment "empty string"]
                     pure (AST.TyString, Operand (OperandNamed emptyStr) SizePtr)
                 AST.TyAuto -> do
                     simpleError locItem "Auto not allowed here"
