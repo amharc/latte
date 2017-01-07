@@ -60,7 +60,8 @@ emitState st = do
     funcs <- fold <$> itraverse emitFunction (st ^. meFunctions)
     strgs <- fold <$> itraverse emitString (st ^. meStrings)
     objs <- fold <$> itraverse emitObject (st ^. meObjects)
-    pure $ funcs <> strgs <> objs
+    emptyString <- emitString "empty_string" ""
+    pure $ funcs <> strgs <> objs <> emptyString
 
 -- |Emits a function
 --

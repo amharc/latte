@@ -241,9 +241,7 @@ transStmt st@(AST.Located l (AST.StmtDecl decl)) = checkType st expectedType >> 
             Just expr -> transExpr expr
             Nothing -> case expectedType of
                 AST.TyString -> do
-                    name <- mkName $ Just "emptyString"
-                    internString (mangleString name) ""
-                    emptyStr <- emitInstr Nothing (GetAddr . MemoryGlobal $ mangleString name) l [InstrComment "empty string"]
+                    emptyStr <- emitInstr Nothing (GetAddr $ MemoryGlobal "empty_string") l [InstrComment "empty string"]
                     pure (AST.TyString, Operand (OperandNamed emptyStr) SizePtr)
                 AST.TyAuto -> do
                     simpleError locItem "Auto not allowed here"
@@ -556,7 +554,7 @@ emitPrototype info = internObject (mangleClassPrototype name) prototype
     defaultValue (AST.TyArray _) = ObjectFieldNull
     defaultValue (AST.TyClass _) = ObjectFieldNull
     defaultValue AST.TyNull = ObjectFieldNull
-    defaultValue AST.TyString = ObjectFieldRef "LATC_emptyString"
+    defaultValue AST.TyString = ObjectFieldRef "empty_string"
     defaultValue AST.TyAuto = error "Auto not allowed here"
 
 transProgram :: GIRMonad m => AST.Program -> m ()
