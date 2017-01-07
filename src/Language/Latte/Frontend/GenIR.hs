@@ -751,9 +751,7 @@ checkTypeImplicitConv ctx expected got = case (expected, got) of
         info <- view (girClasses . at c)
         info' <- view (girClasses . at c')
         case (info, info') of
-            (Just info, Just info') -> do
-                liftIO $ print (map name (classBases info'), name info)
-                unless (name info `elem` map name (classBases info')) err
+            (Just info, Just info') -> unless (name info `elem` map name (classBases info')) err
             _ -> err
     (t, t') | t == t' -> pure ()
     _ -> err
