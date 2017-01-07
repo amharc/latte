@@ -48,6 +48,7 @@ data FuncInfo = FuncInfo
     { _funcInfoDecl :: AST.Located AST.FuncDecl
     , _funcInfoVtablePos :: Maybe Int
     }
+    deriving Show
 
 data ClassInfo = ClassInfo
     { _classInfoDecl :: AST.Located AST.ClassDecl
@@ -57,11 +58,13 @@ data ClassInfo = ClassInfo
     , _classObjFields :: Seq.Seq AST.Type
     , _classObjVtable :: Seq.Seq Ident
     }
+    deriving Show
 
 data ClassField = ClassField
     { _classFieldType :: AST.Type
     , _classFieldId :: Int
     }
+    deriving Show
 
 type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m, HasCallStack)
 
@@ -69,8 +72,10 @@ data Variable = Variable
     { _varType :: !AST.Type
     , _varLoc :: VariableLoc
     }
+    deriving Show
 
 data VariableLoc = VariableLocal !Int | VariableArgument !Int
+    deriving Show
 
 makeLenses ''GIRState
 makeLenses ''GIREnv
@@ -497,14 +502,22 @@ transFuncDecl mClass locDecl@(AST.Located l decl) = do
     girVariables .= Map.empty
     girCurrentBlock .= entryBlock
 
+    forM_ mClass $ \className -> do
+        Just info <- view $ girClasses . at className
+        forM_ (info ^.. classBase . _Just . classMethods . at name . _Just . funcInfoDecl) $
+            flip checkOverride locDecl
+
     local (girCurrentFunction ?~ decl) $ do
+        checkType locDecl $ decl ^. AST.funcRetType
         zipWithM_ addArg [argStart..] (decl ^. AST.funcArgs)
         transStmt $ decl ^. AST.funcBody
         when (decl ^. AST.funcRetType == AST.TyVoid) $
             setEnd BlockEndReturnVoid
 
-    addFunction (mangle mClass (decl ^. AST.funcName)) entryBlock
+    addFunction (mangle mClass name) entryBlock
   where
+    name = decl ^. AST.funcName
+
     addArg idx arg = do
         checkType arg (arg ^. AST.obj . AST.funArgType)
         use (girVariables . at (arg ^. AST.obj . AST.funArgName)) >>= \case
@@ -653,7 +666,6 @@ transProgram (AST.Program prog) = do
                 simpleError method "Method redefinition"
                 pure (acc, objVtable)
             | Just baseMethod <- Map.lookup name baseMethods = do
-                checkOverride (baseMethod ^. funcInfoDecl) method
                 let Just pos = baseMethod ^. funcInfoVtablePos
                     objVtable' = Seq.update pos mangled objVtable
                 pure (Map.insert name (FuncInfo method (Just pos)) acc, objVtable')
@@ -739,8 +751,10 @@ checkTypeImplicitConv ctx expected got = case (expected, got) of
         info <- view (girClasses . at c)
         info' <- view (girClasses . at c')
         case (info, info') of
-            (Just info, Just info') ->  unless (name info `elem` map name (classBases info')) err
-            _ -> simpleError ctx "Type error"
+            (Just info, Just info') -> do
+                liftIO $ print (map name (classBases info'), name info)
+                unless (name info `elem` map name (classBases info')) err
+            _ -> err
     (t, t') | t == t' -> pure ()
     _ -> err
   where
