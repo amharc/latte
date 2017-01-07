@@ -608,9 +608,7 @@ transProgram (AST.Program prog) = do
                     addSelf Nothing acc
                 Just baseDecl -> do
                     acc <- updateClass decls (Set.insert name stack) acc baseDecl
-                    case Map.lookup baseName acc of
-                        Just baseInfo -> addSelf (Just baseInfo) acc
-                        Nothing -> fail "should not happen"
+                    addSelf (Map.lookup baseName acc) acc
       where
         name = decl ^. AST.obj . AST.className
         mbase = decl ^. AST.obj . AST.classBase
