@@ -44,7 +44,7 @@ interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty
         let liveBeforeEnd = DAE.stepEnd liveAtEnd end
 
         body <- liftIO . readIORef $ block ^. blockBody
-        liveBeforeBody <- foldrM (update DAE.stepInstruction) liveBeforeEnd body
+        liveBeforeBody <- foldrM updateInstruction liveBeforeEnd body
         
         phi <- liftIO . readIORef $ block ^. blockPhi
         _ <- foldrM (update DAE.stepPhi) liveBeforeBody phi
@@ -62,14 +62,48 @@ interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty
         => (DCE.LiveVariables -> a -> DCE.LiveVariables)
         -> a -> DCE.LiveVariables -> m DCE.LiveVariables
     update step obj live = do
-        let live'@(DCE.LiveVariables liveBefore) = step live obj
-        obj & forMOf_ names $ \name ->
-            forM_ liveBefore $ \other -> do
-                addDirected name other
-                addDirected other name
-        pure $ live'
+        let live' = step live obj
+        addConflictsWithLive obj live'
+        pure live'
+
+    updateInstruction :: MonadState InterferenceGraph m
+        => Instruction -> DCE.LiveVariables -> m DCE.LiveVariables
+    updateInstruction instr live = do
+        addConflictsWithLive instr live
+        case instr ^. instrPayload of
+            BinOp _ BinOpPlus rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpMinus rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpTimes rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpShiftLeft rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpShiftRight rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpAnd rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpOr rhs -> addConflictsWithOperands instr rhs
+            BinOp _ BinOpDivide _ -> pure ()
+            BinOp _ BinOpModulo _ -> pure ()
+            BinOp _ BinOpLess _ -> pure ()
+            BinOp _ BinOpLessEqual _ -> pure ()
+            BinOp _ BinOpGreater _ -> pure ()
+            BinOp _ BinOpGreaterEqual _ -> pure ()
+            BinOp _ BinOpEqual _ -> pure ()
+            BinOp _ BinOpNotEqual _ -> pure ()
+            UnOp UnOpNeg _ -> pure ()
+            UnOp UnOpNot _ -> pure ()
+            Store _ _ _ -> pure ()
+            Load _ _ -> pure ()
+            GetAddr _ -> pure ()
+            Inc _ _ -> pure ()
+            Dec _ _ -> pure ()
+            IConst _ -> pure ()
+            IIntristic _ -> pure ()
+            Call _ _ -> pure ()
+        pure $ DAE.stepInstruction live instr
     
     addDirected a b = getInterferenceGraph . at a . non Set.empty . contains b .= True
+
+    addConflict a b = addDirected a b >> addDirected b a
+
+    addConflictsWithLive obj (DCE.LiveVariables live) = obj & forMOf_ names $ forM_ live . addConflict
+    addConflictsWithOperands obj x = obj & forMOf_ names $ forMOf_ (operands . operandPayload . _OperandNamed) x . addConflict
 
 mcsOrder :: MonadIO m => [Block] -> InterferenceGraph -> m [Name]
 mcsOrder blocks graph = do

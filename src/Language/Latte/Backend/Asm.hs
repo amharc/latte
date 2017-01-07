@@ -79,3 +79,11 @@ data Instruction
 makeLenses ''Memory
 makePrisms ''RegisterOrSpill
 makePrisms ''Operand
+
+negFlag :: Flag -> Flag
+negFlag FlagEqual = FlagNotEqual
+negFlag FlagNotEqual = FlagEqual
+negFlag FlagLess = FlagGreaterEqual
+negFlag FlagLessEqual = FlagGreater
+negFlag FlagGreater = FlagLessEqual
+negFlag FlagGreaterEqual = FlagLess

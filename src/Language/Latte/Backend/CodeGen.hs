@@ -366,8 +366,8 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         writeBack Asm.RAX name
 
     (Just name, Load from size) -> do
-        reg <- lockInRegister name
         mem <- translateMemory from 
+        reg <- getUnsafeLockedOutputRegisterFor name
         emit $ Asm.Mov (sizeToMult size) (Asm.OpMemory mem) (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
@@ -393,8 +393,8 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     (Just name, BinOp lhs BinOpShiftRight rhs) -> simpleBinOp name lhs rhs Asm.Sar
 
     (Just name, UnOp UnOpNot arg) -> do
-        reg <- lockInRegister name
         argOp <- getAsmOperand arg 
+        reg <- getUnsafeLockedOutputRegisterFor name
         emit $ Asm.Mov (sizeToMult $ arg ^. operandSize) argOp (Asm.OpRegister reg)
         emit $ Asm.Xor (sizeToMult $ arg ^. operandSize) (Asm.OpImmediate 1) (Asm.OpRegister reg)
         esInFlags .= Nothing
@@ -402,8 +402,8 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         unlockRegisters
 
     (Just name, UnOp UnOpNeg arg) -> do
-        reg <- lockInRegister name
         argOp <- getAsmOperand arg 
+        reg <- getUnsafeLockedOutputRegisterFor name
         emit $ Asm.Mov (sizeToMult $ arg ^. operandSize) argOp (Asm.OpRegister reg)
         emit $ Asm.Neg (sizeToMult $ arg ^. operandSize) (Asm.OpRegister reg)
         esInFlags .= Nothing
@@ -412,7 +412,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
 
     (Just name, GetAddr memory) -> do
         mem <- translateMemory memory
-        reg <- lockInRegister name
+        reg <- getUnsafeLockedOutputRegisterFor name
         emit $ Asm.Lea Asm.Mult8 (Asm.OpMemory mem) (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
@@ -430,8 +430,8 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         unlockRegisters
 
     (Just name, IConst arg) -> do
-        reg <- lockInRegister name
         op <- getAsmOperand arg
+        reg <- getUnsafeLockedOutputRegisterFor name
         emit $ Asm.Mov Asm.Mult8 op (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
@@ -439,9 +439,8 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
     _ -> error "unreachable"
   where
     simpleBinOp name lhs rhs f = do
-        reg <- lockInRegister name
-
         lhsOp <- getAsmOperand lhs
+        reg <- getUnsafeLockedOutputRegisterFor name
         emit $ Asm.Mov (sizeToMult $ lhs ^. operandSize) lhsOp (Asm.OpRegister reg)
 
         rhsOp <- getAsmOperand rhs
@@ -599,6 +598,18 @@ instance LockInRegister Name where
                 reg' <- evictLockRegister
                 lockInGivenRegister name reg'
                 pure reg'
+
+getLockedOutputRegisterFor :: MonadState EmitterState m => Name -> m Asm.Register
+getLockedOutputRegisterFor name = use (esPreferredLocations . at name . singular _Just) >>= \case
+    Asm.RSSpill _ -> evictLockRegister
+    Asm.RSRegister reg -> use (esLockedRegisters . contains reg) >>= \case
+        False -> esLockedRegisters . contains reg .= True >> pure reg
+        True -> evictLockRegister
+
+getUnsafeLockedOutputRegisterFor :: MonadState EmitterState m => Name -> m Asm.Register
+getUnsafeLockedOutputRegisterFor name = use (esPreferredLocations . at name . singular _Just) >>= \case
+    Asm.RSSpill _ -> evictLockRegister
+    Asm.RSRegister reg -> esLockedRegisters . contains reg .= True >> pure reg
 
 instance LockInRegister Int where
     lockInGivenRegister i reg = emit $ Asm.Mov Asm.Mult8 (Asm.OpImmediate i) (Asm.OpRegister reg)
