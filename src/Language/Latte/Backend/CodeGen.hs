@@ -18,7 +18,6 @@ import Data.Coerce
 import Data.Foldable
 import Data.IORef
 import qualified Data.Map as Map
-import Data.Maybe
 import Data.Monoid
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
@@ -60,8 +59,7 @@ emitState st = do
     funcs <- fold <$> itraverse emitFunction (st ^. meFunctions)
     strgs <- fold <$> itraverse emitString (st ^. meStrings)
     objs <- fold <$> itraverse emitObject (st ^. meObjects)
-    emptyString <- emitString "empty_string" ""
-    pure $ funcs <> strgs <> objs <> emptyString
+    pure $ funcs <> strgs <> objs
 
 -- |Emits a function
 --
@@ -119,6 +117,7 @@ emitString ident str = pure
     , Asm.Align 8
     , Asm.Type (coerce ident) "@object"
     , Asm.Label (coerce ident)
+    , Asm.QuadInt (BS.length str)
     , Asm.String str
     ]
 
