@@ -6,6 +6,7 @@ Stosowane optymalizacje:
 - propagacja stałych
 - eliminacja kopii
 - usuwanie martwego kodu
+- redukcja siły (mnożenie przez potęgę dwójki -> przesuniecia bitowe)
 - peephole optimisation na wygenerowanym już asemblerze
 - optymalizacja rekursji ogonowej
 

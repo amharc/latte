@@ -8,7 +8,7 @@ stack:
 
 build:
 	PATH="/home/students/inf/PUBLIC/MRJP/ghc-7.10.2/bin:$(PATH)" ./stack build
-	./stack install --local-bin-path="$(shell pwd)"
+	PATH="/home/students/inf/PUBLIC/MRJP/ghc-7.10.2/bin:$(PATH)" ./stack install --local-bin-path="$(shell pwd)"
 
 lib/runtime.o: lib
 	gcc src/runtimec/runtime.c -c -o lib/runtime.o -O3
