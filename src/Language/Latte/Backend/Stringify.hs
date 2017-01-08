@@ -173,13 +173,9 @@ instance Trans Instruction where
     trans (Align i) = sbs ".align " <> BS.intDec i
     trans (String str) = mconcat
         [ sbs ".string \""
-        , BS.byteString $ BS.concatMap escape str
+        , foldMap (\x -> sbs "\\x" <> BS.wordHex (fromIntegral $ fromEnum x)) $ BS.unpack str
         , sbs "\""
         ]
-      where
-        escape '\\' = "\\\\"
-        escape '\"' = "\\\""
-        escape c = BS.singleton c
     trans (Push mult op) = sbs "\tpush" <> suffix mult <> " " <> transMult mult op
     trans (Pop mult op) = sbs "\tpop" <> suffix mult <> " " <> transMult mult op
     trans (AnnotateLiveStart regs) = sbs "#live registers analysis start: " <> foldMap (\reg -> trans reg <> sbs " ") regs
