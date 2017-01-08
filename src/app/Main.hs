@@ -24,61 +24,45 @@ import Text.Parsec.ByteString
 import Text.PrettyPrint
 import Text.PrettyPrint.HughesPJClass
 import System.Environment
+import System.Exit
+import System.FilePath
 import System.IO
 
-middle :: P.Program -> IO ()
-middle program = do
-    hPutStrLn stderr "Parsed:"
-    hPutStrLn stderr . render $ pPrint program
-
+middle :: FilePath -> P.Program -> IO ()
+middle file program = do
     diags <- M.run $ do
         P.generateIR program
-        M.debugState >>= liftIO . hPutStrLn stderr . render 
 
-        liftIO $ hPutStrLn stderr "\n\nMemToReg\n\n"
         MemToReg.opt
-        M.debugState >>= liftIO . hPutStrLn stderr . render 
         Fixed.iterOpt 1000 $ do
-            liftIO $ hPutStr stderr "\n\nSimplifyPhi\n\n"
             SimplifyPhi.opt
-            M.debugState >>= liftIO . hPutStrLn stderr . render 
-
-            liftIO $ hPutStr stderr "\n\nShrinkEnds\n\n"
             ShrinkEnds.opt
-            M.debugState >>= liftIO . hPutStrLn stderr . render 
-
-            liftIO $ hPutStr stderr "\n\nStrength reduction\n\n"
             StrengthReduction.opt
-            M.debugState >>= liftIO . hPutStrLn stderr . render
-
-            liftIO $ hPutStr stderr "\n\nPropagate\n\n"
             Propagate.opt
-            M.debugState >>= liftIO . hPutStrLn stderr . render 
-
-            liftIO $ hPutStr stderr "\n\nSimplify control flow\n\n"
             SimplifyControlFlow.opt
-            M.debugState >>= liftIO . hPutStrLn stderr . render 
-
-            liftIO $ hPutStr stderr "\n\nRemove dead code\n\n"
             DeadCodeElimination.opt
-            M.debugState >>= liftIO . hPutStrLn stderr . render
 
-        liftIO $ hPutStrLn stderr "\n\nTail calls\n\n"
         TailCalls.opt
-        M.debugState >>= liftIO . hPutStrLn stderr . render 
-
         CheckUnreachability.check
 
         M.whenNoDiagnostics $ do
+            liftIO $ hPutStrLn stderr "OK"
             asm <- get >>= B.emitState
-            liftIO $ withFile "pre.s" WriteMode $ B.translateOut asm
-            liftIO $ withFile "asm.s" WriteMode $ B.translateOut (Peephole.opt asm)
+            let asmFile = file -<.> "s"
+            liftIO $ withFile asmFile WriteMode $ B.translateOut (Peephole.opt asm)
+            liftIO $ exitSuccess
 
+    hPutStrLn stderr "ERROR"
     forM_ diags $ \diag ->
         hPutStrLn stderr . render $ pPrint diag
-
+    exitFailure
 
 main :: IO ()
 main = getArgs >>= \case
-    [file] -> parseFromFile P.program file >>= either (hPrint stderr) middle
+    [file] -> parseFromFile P.program file >>= \case
+        Right ast -> middle file ast
+        Left err -> do
+            hPutStrLn stderr "ERROR"
+            hPrint stderr err
+            exitFailure
     _ -> fail "You cannot into arguments"

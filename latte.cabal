@@ -14,7 +14,7 @@ extra-source-files:  README.md
 cabal-version:       >=1.10
 
 library
-  hs-source-dirs:      src
+  hs-source-dirs:      src/src
   exposed-modules:     Language.Latte.Frontend.AST
                        Language.Latte.Frontend.Parser
                        Language.Latte.Frontend.GenIR
@@ -48,7 +48,7 @@ library
   ghc-options:         -Wall
 
 executable latte-exe
-  hs-source-dirs:      app
+  hs-source-dirs:      src/app
   main-is:             Main.hs
   ghc-options:         -Wall
   build-depends:       base
@@ -56,15 +56,7 @@ executable latte-exe
                      , parsec >= 3.1 && < 4.0
                      , pretty >= 1.1 && < 2.0
                      , mtl >= 2.2 && < 3.0
-  default-language:    Haskell2010
-
-test-suite latte-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
-  build-depends:       base
-                     , latte
-  ghc-options:         -Wall
+                     , filepath >= 1.4 && < 2.0
   default-language:    Haskell2010
 
 source-repository head

@@ -40,6 +40,7 @@ instance Trans Register where
     transMult Mult8 R15 = sbs "%r15"
     transMult Mult8 RSP = sbs "%rsp"
     transMult Mult8 RBP = sbs "%rbp"
+    transMult Mult8 RFLAGS = sbs "%rflags"
 
     transMult Mult4 RAX = sbs "%eax"
     transMult Mult4 RBX = sbs "%ebx"
@@ -57,6 +58,7 @@ instance Trans Register where
     transMult Mult4 R15 = sbs "%r15d"
     transMult Mult4 RSP = sbs "%esp"
     transMult Mult4 RBP = sbs "%epp"
+    transMult Mult4 RFLAGS = sbs "%eflags"
 
     transMult Mult2 RAX = sbs "%ax"
     transMult Mult2 RBX = sbs "%bx"
@@ -74,6 +76,7 @@ instance Trans Register where
     transMult Mult2 R15 = sbs "%r15w"
     transMult Mult2 RSP = sbs "%sp"
     transMult Mult2 RBP = sbs "%bp"
+    transMult Mult2 RFLAGS = sbs "%flags"
 
     transMult Mult1 RAX = sbs "%al"
     transMult Mult1 RBX = sbs "%bl"
@@ -91,6 +94,7 @@ instance Trans Register where
     transMult Mult1 R15 = sbs "%r15b"
     transMult Mult1 RSP = sbs "%spl"
     transMult Mult1 RBP = sbs "%bpl"
+    transMult Mult1 RFLAGS = sbs "%flags_no_idea"
 
 instance Trans Operand where
     transMult mult (OpRegister reg) = transMult mult reg

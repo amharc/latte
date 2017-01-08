@@ -1,0 +1,6 @@
+#!/bin/bash
+
+set -e
+
+./latte-exe $1
+gcc lib/runtime.o "${1%.lat}.s" -o "${1%.lat}"

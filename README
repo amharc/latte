@@ -1,0 +1,20 @@
+Kompilator kompiluje się normalnie, poleceniem make. Pobierze ono narzędzie stack -- powszechnie używany menedżer pakietów i budowania dla języka Haskell, który dociągnie, znów, powszechnie używane zależności w języku Haskell (jak bibliotekę lens, bytestring lub parsec). Wymagam kompilatora ghc w wersji 8, jednakże narzędzie stack samo zadba o pobranie nowej wersji kompilatora, gdyby okazalo się, że nie ma jej jeszcze. Samo narzędzie stack znajduje się wprawdzie na students (w /home/students/inf/PUBLIC/MRJP/Stack/stack), lecz prawa do tego pliku ma jedynie użytkownik ben, a zatem konieczne jest pobranie go na nowo z sieci.
+
+Parsuję używając powszechnie znanej biblioteki do monadycznych kombinatorów parserów: parsec. Kompiluję do asemblera x86_64, przechodząc przez własną reprezentację pośrednią bazowaną na LLVM, w której używam SSA. Alokacji rejestrów dokonuję przez kolorowanie grafów (ponieważ mam go w postaci SSA to alokacja zachłanna wystarcza, jeśli przejdzie się w odpowiednim porządku, co wynika z tego, że graf interferencji jest ,,chordal graph'' -- używam tu standardowego algorytmu alokacji rejestrów dla postaci SSA), jednakże spillowanie zmiennych jest globalne. Niestety, mam bardzo duże ramki stosu (odkładam kopie dużej liczby rzeczy na stos przy wejściu do funkcji), lecz zaimplementowałem optymalizację rekursji ogonowej.
+
+Stosowane optymalizacje:
+- propagacja stałych
+- eliminacja kopii
+- usuwanie martwego kodu
+- peephole optimisation na wygenerowanym już asemblerze
+
+Zaimplementowane rozszerzenia:
+- tablice
+- obiekty z metodami wirtualnymi
+(odśmiecanie planuję oddać w drugiej iteracji, zapewne generacyjne)
+
+W katalogu src znajdują się trzy podkatalogi: 
+- app, zawierający sam plik Main.hs projektu
+- runtimec, zawierający źródła runtime'u (napisanego, przynajmniej w tej wersji projektu, w C)
+- src/Text, zawierający modyfikację pliku z biblioteki parsec -- ten kod nie jest mój, jest jedynie drobną modyfikacją parseca, żeby pozwolić na zarówno # jak i // jako początki komentarza liniowego
+- src/Language, zawierający mój kod kompilatora, podzielony na Frontend, Middleend i Backend
