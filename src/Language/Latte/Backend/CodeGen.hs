@@ -203,9 +203,9 @@ translateBlock block = do
             esRegisterState .= regs
 
             pure (trueLabel', falseLabel')
-        BlockEndTailCall (SCall dest args) | length args < 7 -> do
+        BlockEndTailCall (SCall dest args) | length args <= length registerArguments -> do
             use (esLiveAfterBody . at block . singular _Just) >>= annotateLive
-            zipWithM_ safeLockInGivenRegister args [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
+            zipWithM_ safeLockInGivenRegister args registerArguments
             forM_ (reverse tailCallSavedRegs) $ \reg -> do
                 lockRegister reg
                 emit . Asm.Pop Asm.Mult8 $ Asm.OpRegister reg
@@ -477,18 +477,34 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
 
         reg <- lockInRegister name
         emit $ Asm.Set flag (Asm.OpRegister reg)
-        --emit $ Asm.Movsbq (Asm.OpRegister reg) (Asm.OpRegister reg)
         writeBack reg name
         unlockRegisters
 
     call target args = do
-        mapM_ clobberRegister ([Asm.RAX, Asm.RCX, Asm.RDX, Asm.RSI, Asm.RDI, Asm.R8, Asm.R9, Asm.R10, Asm.R11] :: [Asm.Register])
-        zipWithM_ safeLockInGivenRegister args [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
+        zipWithM_ safeLockInGivenRegister args registerArguments
+        mapM_ clobberRegister $ [Asm.RAX, Asm.R10, Asm.R11] ++ drop (length args) registerArguments
+
+        let stackArgs = drop (length registerArguments) args
+
+        when (odd $ length stackArgs) . emit $ Asm.Sub Asm.Mult8 (Asm.OpImmediate 8) (Asm.OpRegister Asm.RSP)
+        forM_ (reverse stackArgs) $ \arg -> do
+            op <- getAsmOperand arg
+            emit $ Asm.Push Asm.Mult8 op
+
         op <- translateMemory target
         lockRegister Asm.RAX
         emit $ Asm.Call (Asm.OpMemory op)
+
+        unless (null stackArgs) $ do
+            let len0 = length stackArgs
+                len = if odd len0 then len0 + 1 else len0
+            emit $ Asm.Add Asm.Mult8 (Asm.OpImmediate $ 8 * len) (Asm.OpRegister Asm.RSP)
+
         esInFlags .= Nothing
         unlockRegisters
+
+registerArguments :: [Asm.Register]
+registerArguments = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
 
 translateMemory :: MonadState EmitterState m => Memory -> m Asm.Memory
 translateMemory (MemoryLocal _) = fail "No locals expected here"
@@ -550,7 +566,6 @@ instance GetAsmOperand Asm.RegisterOrSpill where
         Just RSMem -> pure . Asm.OpMemory $ memoryOfRegister reg
         Just _ -> pure $ Asm.OpRegister reg
         Nothing -> fail "No register state"
-
 
 instance GetAsmOperand Name where
     getAsmOperand name = use (esPreferredLocations . at name . singular _Just) >>= getAsmOperand

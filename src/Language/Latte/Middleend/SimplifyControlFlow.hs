@@ -20,4 +20,5 @@ runBlock :: MonadIO m => Block -> m ()
 runBlock block = liftIO . modifyIORef (block ^. blockEnd) $ \case
     BlockEndBranchCond (Operand (OperandInt 0) _) _ ifFalse -> BlockEndBranch ifFalse
     BlockEndBranchCond (Operand (OperandInt _) _) ifTrue _ -> BlockEndBranch ifTrue
+    BlockEndBranchCond _ ifTrue ifFalse | ifTrue == ifFalse -> BlockEndBranch ifTrue
     end -> end
