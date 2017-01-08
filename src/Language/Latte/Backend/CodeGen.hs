@@ -35,7 +35,6 @@ data EmitterState = EmitterState
     { _esInstructions :: Seq.Seq Asm.Instruction
     , _esRegisterState :: Map.Map Asm.Register RegisterState
     , _esPreferredLocations :: Map.Map Name Asm.RegisterOrSpill
-    , _esNumLocations :: Int
     , _esSavedRegsStart :: Int
     , _esLockedRegisters :: Set.Set Asm.Register
     , _esLiveAfterPhi :: Map.Map Block (Set.Set Name)
@@ -75,7 +74,6 @@ emitFunction functionName desc = do
     liveAfterPhiSource <- iforM liveAfterEnd $ flip DAE.stepPhiSource
     liveAfterBody <- calcLiveAfterBody liveAfterPhiSource
     liveAfterPhi <- calcLiveAfterPhi liveAfterPhiSource
-    arguments <- argumentsOfEntryBlock entryBlock
     evalStateT (do
         emit $ Asm.Section ".text"
         emit $ Asm.Type (coerce functionName) "@function"
@@ -89,7 +87,6 @@ emitFunction functionName desc = do
             { _esInstructions = Seq.empty
             , _esRegisterState = Map.fromList [(reg, RSReg) | reg <- registerOrder]
             , _esPreferredLocations = preprocessLocations <$> regAlloc
-            , _esNumLocations = foldl max 0 regAlloc
             , _esSavedRegsStart = 16 * ((foldl max (length registerOrder) regAlloc + 1) `div` 2) + 8
             , _esLockedRegisters = Set.empty
             , _esLiveAfterPhi = liveAfterPhi
@@ -142,11 +139,6 @@ emitObject ident obj = pure $ start Seq.>< end
                 [Asm.QuadInt 0]
             ObjectFieldRef ref ->
                 [Asm.Quad (coerce ref)]
-
-argumentsOfEntryBlock :: MonadIO m => Block -> m Int
-argumentsOfEntryBlock entryBlock = do
-    body <- liftIO . readIORef $ entryBlock ^. blockBody
-    pure . fromMaybe 0 $ maximumOf (traverse . instrPayload . _ILoad . loadFrom . _MemoryArgument) body
 
 emit :: MonadState EmitterState m => Asm.Instruction -> m ()
 emit instr = esInstructions %= flip snoc instr
@@ -271,7 +263,6 @@ parallelMove pairs = do
         }
 
     go loc remaining = forM_ (Set.minView remaining) $ \(leaf, rest) -> do
-        st <- get
         Just source <- use (pmsIncoming . at leaf)
         emitSimpleMove source leaf
         pmsIncoming . at leaf .= Nothing
@@ -359,8 +350,7 @@ translateInstr instr = case (instr ^. instrResult, instr ^. instrPayload) of
         call dest args
         writeBack Asm.RAX name
 
-    (Just name, IIntristic (IntristicAlloc length ty)) -> do
-        -- TODO types
+    (Just name, IIntristic (IntristicAlloc length _)) -> do
         call (MemoryGlobal "alloc") [length]
         writeBack Asm.RAX name
 
@@ -509,7 +499,7 @@ registerArguments = [Asm.RDI, Asm.RSI, Asm.RDX, Asm.RCX, Asm.R8, Asm.R9]
 translateMemory :: MonadState EmitterState m => Memory -> m Asm.Memory
 translateMemory (MemoryLocal _) = fail "No locals expected here"
 translateMemory (MemoryArgument i)
-    | i < 6 = do
+    | i < length registerArguments = do
         srs <- use esSavedRegsStart
         pure $ Asm.Memory Asm.RBP Nothing (- srs - i * 8 - 8)
     | otherwise = pure $ Asm.Memory Asm.RBP Nothing $ (2 + i - length regs) * 8
