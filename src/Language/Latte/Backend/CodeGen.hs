@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing -fno-warn-type-defaults #-}
 module Language.Latte.Backend.CodeGen (emitState, sizeToInt) where
 
@@ -44,8 +45,8 @@ data EmitterState = EmitterState
     }
 
 data ParallelMoveState = ParallelMoveState
-    { _pmsIncoming :: Map.Map Name Operand
-    , _pmsOutgoing :: Map.Map Name (Set.Set Name)
+    { _pmsIncoming :: Map.Map Asm.RegisterOrSpill Operand
+    , _pmsOutgoing :: Map.Map Asm.RegisterOrSpill (Set.Set Asm.RegisterOrSpill)
     }
     deriving Show
 
@@ -71,8 +72,9 @@ emitFunction functionName desc = do
     blocks <- reachableBlocks entryBlock
     regAlloc <- allocateRegisters blocks
     liveAfterEnd <- DAE.runDAEBlocks blocks
-    liveAfterPhi <- calcLiveAfterPhi liveAfterEnd
-    liveAfterBody <- calcLiveAfterBody liveAfterEnd
+    liveAfterPhiSource <- iforM liveAfterEnd $ flip DAE.stepPhiSource
+    liveAfterBody <- calcLiveAfterBody liveAfterPhiSource
+    liveAfterPhi <- calcLiveAfterPhi liveAfterPhiSource
     arguments <- argumentsOfEntryBlock entryBlock
     evalStateT (do
         emit $ Asm.Section ".text"
@@ -251,50 +253,54 @@ translateBlock block = do
 
     annotateLive = calcLiveRegs >=> emit . Asm.AnnotateLiveStart
 
-parallelMove :: (MonadState EmitterState m) => [(Operand, Name)] -> m ()
-parallelMove pairs = evalStateT (go remaining0 >> cycles) st0
+parallelMove :: MonadState EmitterState m => [(Operand, Name)] -> m ()
+parallelMove pairs = do
+    preferredLocations <- use esPreferredLocations
+    let loc name = preferredLocations ^. at name . singular _Just
+        st = st0 loc
+        remaining = views pmsIncoming Map.keysSet st `Set.difference` views pmsOutgoing Map.keysSet st
+    evalStateT (go loc remaining >> cycles loc) (st0 loc)
   where
-    st0 = ParallelMoveState
-        { _pmsIncoming = foldr (\(from, to) acc -> acc & at to ?~ from) Map.empty pairs
+    st0 loc = ParallelMoveState
+        { _pmsIncoming = foldr (\(from, loc -> to) acc -> acc & at to ?~ from) Map.empty pairs
         , _pmsOutgoing = foldr
                 (curry $ \case
-                    ((Operand (OperandNamed from) _, to), acc) -> acc & at from . non Set.empty . contains to .~ True
+                    ((Operand (OperandNamed (loc -> from)) _, loc -> to), acc) -> acc & at from . non Set.empty . contains to .~ True
                     (_, acc) -> acc)
                 Map.empty pairs
         }
-    remaining0 = views pmsIncoming Map.keysSet st0 `Set.difference` views pmsOutgoing Map.keysSet st0
 
-    go remaining = forM_ (Set.minView remaining) $ \(leaf, rest) -> do
+    go loc remaining = forM_ (Set.minView remaining) $ \(leaf, rest) -> do
         st <- get
         Just source <- use (pmsIncoming . at leaf)
         emitSimpleMove source leaf
         pmsIncoming . at leaf .= Nothing
         case source of
-            Operand (OperandNamed source) _ -> do
+            Operand (OperandNamed (loc -> source)) _ -> do
                 pmsOutgoing . at source . non Set.empty . contains leaf .= False
                 
                 noOut <- uses (pmsOutgoing . at source) null
                 noIn <- uses (pmsIncoming . at source) null
 
                 if not noIn && noOut
-                    then go $ Set.insert source rest
-                    else go rest
-            _ -> go rest
+                    then go loc $ Set.insert source rest
+                    else go loc rest
+            _ -> go loc rest
 
-    cycles = uses pmsIncoming Map.minViewWithKey >>= \case
+    cycles loc = uses pmsIncoming Map.minViewWithKey >>= \case
         Nothing -> pure ()
         Just ((start, _), _) -> do
-            cycle start start
-            cycles
+            cycle loc start start
+            cycles loc
 
-    cycle start cur = use (pmsIncoming . at cur) >>= \case
-        Just (Operand (OperandNamed prev) _)
+    cycle loc start cur = use (pmsIncoming . at cur) >>= \case
+        Just (Operand (OperandNamed (loc -> prev)) _)
             | prev == start -> 
                 pmsIncoming . at cur .= Nothing
             | otherwise -> do
                 emitSwap cur prev
                 pmsIncoming . at cur .= Nothing
-                cycle start prev
+                cycle loc start prev
         x -> error $ show x
 
     emitSwap lhs rhs = lift $ do
@@ -538,14 +544,16 @@ phiBlockIdent from to = coerce $ BS.concat
 class GetAsmOperand a where
     getAsmOperand :: MonadState EmitterState m => a -> m Asm.Operand
 
+instance GetAsmOperand Asm.RegisterOrSpill where
+    getAsmOperand (Asm.RSSpill i) = pure . Asm.OpMemory $ memoryOfSpill i
+    getAsmOperand (Asm.RSRegister reg) = use (esRegisterState . at reg) >>= \case
+        Just RSMem -> pure . Asm.OpMemory $ memoryOfRegister reg
+        Just _ -> pure $ Asm.OpRegister reg
+        Nothing -> fail "No register state"
+
+
 instance GetAsmOperand Name where
-    getAsmOperand name = use (esPreferredLocations . at name) >>= \case
-        Just (Asm.RSSpill i) -> pure . Asm.OpMemory $ memoryOfSpill i
-        Just (Asm.RSRegister reg) -> use (esRegisterState . at reg) >>= \case
-            Just RSMem -> pure . Asm.OpMemory $ memoryOfRegister reg
-            Just _ -> pure $ Asm.OpRegister reg
-            Nothing -> fail "No register state"
-        Nothing -> fail "No preferred location for name"
+    getAsmOperand name = use (esPreferredLocations . at name . singular _Just) >>= getAsmOperand
 
 instance GetAsmOperand Int where
     getAsmOperand = pure . Asm.OpImmediate
@@ -576,42 +584,49 @@ class LockInRegister a where
         lockInGivenRegister x reg
         pure reg
 
-instance LockInRegister Name where
-    lockInGivenRegister name reg = use (esPreferredLocations . at name . singular _Just) >>= \case
-            Asm.RSSpill i -> do
-                emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfSpill i) (Asm.OpRegister reg)
-            Asm.RSRegister reg' -> use (esRegisterState . at reg') >>= \case
-                Just RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
-                Just _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
-                Nothing -> fail "No register state for register"
+instance LockInRegister Asm.RegisterOrSpill where
+    lockInGivenRegister (Asm.RSSpill i) reg =
+        emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfSpill i) (Asm.OpRegister reg)
+    lockInGivenRegister (Asm.RSRegister reg') reg = use (esRegisterState . at reg') >>= \case
+        Just RSReg -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg') (Asm.OpRegister reg)
+        Just _ -> emit $ Asm.Mov Asm.Mult8 (Asm.OpMemory $ memoryOfRegister reg') (Asm.OpRegister reg)
+        Nothing -> fail "No register state for register"
 
-    lockInRegister name = use (esPreferredLocations . at name . singular _Just) >>= \case
-        Asm.RSSpill _ -> do
-            reg <- evictLockRegister
-            lockInGivenRegister name reg
+    lockInRegister r@(Asm.RSSpill _) = do
+        reg <- evictLockRegister
+        lockInGivenRegister r reg
+        pure reg
+    lockInRegister r@(Asm.RSRegister reg) = use (esLockedRegisters . contains reg) >>= \case
+        False -> do
+            restoreRegister reg
+            esLockedRegisters . contains reg .= True
             pure reg
-        Asm.RSRegister reg -> use (esLockedRegisters . contains reg) >>= \case
-            False -> do
-                restoreRegister reg
-                esLockedRegisters . contains reg .= True
-                pure reg
-            True -> do
-                reg' <- evictLockRegister
-                lockInGivenRegister name reg'
-                pure reg'
+        True -> do
+            reg' <- evictLockRegister
+            lockInGivenRegister r reg'
+            pure reg'
 
-getLockedOutputRegisterFor :: MonadState EmitterState m => Name -> m Asm.Register
-getLockedOutputRegisterFor name = use (esPreferredLocations . at name . singular _Just) >>= \case
-    Asm.RSSpill _ -> evictLockRegister
-    Asm.RSRegister reg -> use (esLockedRegisters . contains reg) >>= \case
+instance LockInRegister Name where
+    lockInGivenRegister name reg = use (esPreferredLocations . at name . singular _Just) >>= flip lockInGivenRegister reg
+    lockInRegister name = use (esPreferredLocations . at name . singular _Just) >>= lockInRegister
+
+class GetOutputRegisterFor a where
+    getLockedOutputRegisterFor :: MonadState EmitterState m => a -> m Asm.Register
+    getUnsafeLockedOutputRegisterFor :: MonadState EmitterState m => a -> m Asm.Register
+
+instance GetOutputRegisterFor Asm.RegisterOrSpill where
+    getLockedOutputRegisterFor (Asm.RSSpill _) = evictLockRegister
+    getLockedOutputRegisterFor (Asm.RSRegister reg) = use (esLockedRegisters . contains reg) >>= \case
         False -> esLockedRegisters . contains reg .= True >> pure reg
         True -> evictLockRegister
 
-getUnsafeLockedOutputRegisterFor :: MonadState EmitterState m => Name -> m Asm.Register
-getUnsafeLockedOutputRegisterFor name = use (esPreferredLocations . at name . singular _Just) >>= \case
-    Asm.RSSpill _ -> evictLockRegister
-    Asm.RSRegister reg -> esLockedRegisters . contains reg .= True >> pure reg
+    getUnsafeLockedOutputRegisterFor (Asm.RSSpill _) = evictLockRegister
+    getUnsafeLockedOutputRegisterFor (Asm.RSRegister reg) = esLockedRegisters . contains reg .= True >> pure reg
 
+instance GetOutputRegisterFor Name where
+    getLockedOutputRegisterFor name = use (esPreferredLocations . at name . singular _Just) >>= getLockedOutputRegisterFor
+    getUnsafeLockedOutputRegisterFor name = use (esPreferredLocations . at name . singular _Just) >>= getUnsafeLockedOutputRegisterFor
+    
 instance LockInRegister Int where
     lockInGivenRegister i reg = emit $ Asm.Mov Asm.Mult8 (Asm.OpImmediate i) (Asm.OpRegister reg)
 
@@ -630,17 +645,21 @@ instance LockInRegister OperandPayload where
     lockInGivenRegister (OperandInt i) = lockInGivenRegister i
     lockInGivenRegister OperandUndef = lockInGivenRegister 0
 
-writeBack :: MonadState EmitterState m => Asm.Register -> Name -> m ()
-writeBack reg name = use (esPreferredLocations . at name . singular _Just) >>= \case
-    Asm.RSSpill i -> 
-        emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfSpill i)
-    Asm.RSRegister reg'
-        | reg == reg' -> markRegisterDirty reg
-        | otherwise -> use (esRegisterState . at reg' . singular _Just) >>= \case
+class WriteBack a where
+    writeBack :: MonadState EmitterState m => Asm.Register -> a -> m ()
+
+instance WriteBack Asm.RegisterOrSpill where
+    writeBack reg (Asm.RSSpill i) = emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfSpill i)
+    writeBack reg (Asm.RSRegister reg')
+        | reg == reg' = markRegisterDirty reg
+        | otherwise = use (esRegisterState . at reg' . singular _Just) >>= \case
             RSMem -> emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpMemory $ memoryOfRegister reg')
             _ -> do
                 markRegisterDirty reg'
                 emit $ Asm.Mov Asm.Mult8 (Asm.OpRegister reg) (Asm.OpRegister reg')
+
+instance WriteBack Name where
+    writeBack reg name = use (esPreferredLocations . at name . singular _Just) >>= writeBack reg
 
 saveRegister :: MonadState EmitterState m => Asm.Register -> m ()
 saveRegister reg = use (esRegisterState . at reg . singular _Just) >>= \case

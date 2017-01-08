@@ -40,23 +40,17 @@ interferenceGraph :: MonadIO m => [Block] -> m InterferenceGraph
 interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty) $ do
     liveAtEnds <- DAE.runDAEBlocks blocks
     iforM_ (liveAtEnds :: Map.Map Block DCE.LiveVariables) $ \block liveAtEnd -> do 
+        liveBeforeSourcePhi <- DAE.stepPhiSource liveAtEnd block
         end <- liftIO . readIORef $ block ^. blockEnd
-        let liveBeforeEnd = DAE.stepEnd liveAtEnd end
+        let liveBeforeEnd = DAE.stepEnd liveBeforeSourcePhi end
 
         body <- liftIO . readIORef $ block ^. blockBody
         liveBeforeBody <- foldrM updateInstruction liveBeforeEnd body
         
         phi <- liftIO . readIORef $ block ^. blockPhi
-        _ <- foldrM (update DAE.stepPhi) liveBeforeBody phi
-
-        phi & forMOf_ operands $ \case
-            Operand (OperandNamed other) _ ->
-                phi & forMOf_ (traverse . name) $ \name ->
-                    when (other /= name) $ do
-                        addDirected name other
-                        addDirected other name
-            _ -> pure ()
-                        
+        phi & forMOf_ (folded . name) $ \first -> do
+            phi & forMOf_ (folded . name) $ addConflict first
+            addConflictsWithLive first liveBeforeBody
   where
     update :: (MonadState InterferenceGraph m, HasNames a)
         => (DCE.LiveVariables -> a -> DCE.LiveVariables)
@@ -100,6 +94,7 @@ interferenceGraph blocks = liftIO . flip execStateT (InterferenceGraph Map.empty
     
     addDirected a b = getInterferenceGraph . at a . non Set.empty . contains b .= True
 
+    addConflict a b | a == b = pure ()
     addConflict a b = addDirected a b >> addDirected b a
 
     addConflictsWithLive obj (DCE.LiveVariables live) = obj & forMOf_ names $ forM_ live . addConflict

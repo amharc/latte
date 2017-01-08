@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
-module Language.Latte.Middleend.DataflowAnalysisEngine (DAEDirection(..), DAEPostProcess(..), DAE(..), runDAE, runDAEBlocks) where
+module Language.Latte.Middleend.DataflowAnalysisEngine (DAEDirection(..), DAEPostProcess(..), DAE(..), runDAE, runDAEBlocks, stepPhiSource) where
 
 import Control.Monad.IO.Class
 import Control.Monad.State
@@ -27,8 +27,15 @@ class (Monoid a, Eq a) => DAE a where
     postProcess = DAENormal
 
     stepInstruction :: a -> Instruction -> a
-    stepPhi :: a -> PhiNode -> a
+    stepPhiBranch :: a -> Operand -> a
+    stepPhiTarget :: Foldable f => a -> f PhiNode -> a
     stepEnd :: a -> BlockEnd -> a
+
+stepPhiSource :: (DAE a, MonadIO m) => a -> Block -> m a
+stepPhiSource dae block = do
+    succsPhi <- successors block >>= mapM (views blockPhi $ liftIO . readIORef)
+    pure $ foldl stepPhiBranch dae $
+        succsPhi ^.. folded . folded . phiBranches . folded . filtered (has $ phiFrom . only block) . phiValue
 
 runDAE :: (MonadIO m, MonadState s m, HasMiddleEndState s, DAE a) => m (Map.Map Block a)
 runDAE = uses meFunctions toList >>= fmap Map.unions . traverse function
@@ -68,17 +75,17 @@ iteration preds order prev = liftIO $ foldlM addBlock prev order
 
         let init = foldMap (prev Map.!) (preds Map.! block)
 
-        let ret = case direction @a of
-                DAEForward ->
-                    init & flip (foldl stepPhi) phis
-                         & flip (foldl stepInstruction) body
-                         & flip stepEnd end
-                DAEBackward -> 
-                    init & flip stepEnd end
-                         & flip (foldr (flip stepInstruction)) body
-                         & flip (foldr (flip stepPhi)) phis
-
-        pure ret
+        case direction @a of
+            DAEForward -> do
+                let first = init & flip stepPhiTarget phis
+                                 & flip (foldl stepInstruction) body
+                                 & flip stepEnd end
+                stepPhiSource first block
+            DAEBackward -> do
+                first <- stepPhiSource init block
+                pure $ first & flip stepEnd end
+                             & flip (foldr (flip stepInstruction)) body
+                             & flip stepPhiTarget phis
 
 post :: forall a. DAE a => Map.Map Block [Block] -> Map.Map Block a -> Map.Map Block a
 post preds prev = case postProcess @a of

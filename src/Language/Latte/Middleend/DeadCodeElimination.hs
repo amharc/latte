@@ -37,18 +37,15 @@ runBlock liveMap block = liftIO $ do
     body <- readIORef $ block ^. blockBody
     end <- readIORef $ block ^. blockEnd
 
-    let (body', liveBeforeBody) = foldr goInstr (Seq.empty, step liveAfter end) body
-        (phi', _) = foldr go (Seq.empty, liveBeforeBody) phi
+    liveBeforePhiTargets <- DAE.stepPhiSource liveAfter block
+
+    let (body', liveBeforeBody) = foldr goInstr (Seq.empty, step liveBeforePhiTargets end) body
+        phi' = Seq.filter (not . flip isRemovable liveBeforeBody) phi
 
     writeIORef (block ^. blockPhi) phi'
     writeIORef (block ^. blockBody) body'
   where
     liveAfter = liveMap Map.! block
-
-    go :: (HasOperands a, Removable a, HasNames a) => a -> (Seq.Seq a, LiveVariables) -> (Seq.Seq a, LiveVariables)
-    go item (acc, live)
-        | isRemovable item live = (acc, live)
-        | otherwise = (item Seq.<| acc, step live item)
 
     goInstr :: Instruction -> (Seq.Seq Instruction, LiveVariables) -> (Seq.Seq Instruction, LiveVariables)
     goInstr item (acc, live)
@@ -61,7 +58,8 @@ instance DAE.DAE LiveVariables where
     direction = DAE.DAEBackward
     postProcess = DAE.DAEMerge
     stepInstruction = step
-    stepPhi = step
+    stepPhiBranch = stepSimple
+    stepPhiTarget (LiveVariables live) phis = LiveVariables $ foldr Set.delete live (phis ^.. folded . names)
     stepEnd = step
 
 instance Monoid LiveVariables where
@@ -73,8 +71,10 @@ step live obj
     | isRemovable obj live = strip $ live
     | otherwise = strip $ stepSimple live obj
   where
-    stepSimple (LiveVariables live) obj = LiveVariables $ foldr Set.insert live (obj ^.. operands . operandPayload . _OperandNamed)
     strip (LiveVariables live) = LiveVariables $ foldr Set.delete live (obj ^.. names)
+
+stepSimple :: HasOperands a => LiveVariables -> a -> LiveVariables
+stepSimple (LiveVariables live) obj = LiveVariables $ foldr Set.insert live (obj ^.. operands . operandPayload . _OperandNamed)
 
 isLive :: HasNames a => a -> LiveVariables -> Bool
 isLive obj (LiveVariables live) = obj & anyOf names (flip Set.member live)
