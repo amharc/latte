@@ -1,7 +1,10 @@
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ >= 801
+{-# LANGUAGE StrictData #-}
+#endif
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ExtendedDefaultRules #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE StrictData #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}

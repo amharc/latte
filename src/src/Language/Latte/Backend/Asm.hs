@@ -1,6 +1,9 @@
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ >= 801
+{-# LANGUAGE StrictData #-}
+#endif
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE StrictData #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Language.Latte.Backend.Asm where
 
@@ -24,7 +27,11 @@ data Memory
         , _memIndex :: Maybe (Register, Multiplier)
         , _memDisplacement :: {-# UNPACK #-} Int
         }
+#if __GLASGOW_HASKELL__ >= 801
     | Global ~Ident
+#else
+    | Global Ident
+#endif
     deriving (Eq, Show, Data, Typeable)
 
 data Multiplier = Mult1 | Mult2 | Mult4 | Mult8
@@ -58,7 +65,11 @@ data Instruction
     | Inc Multiplier Operand
     | Dec Multiplier Operand
     | Jump Operand
+#if __GLASGOW_HASKELL__ >= 801
     | JumpCond Flag ~Ident
+#else
+    | JumpCond Flag Ident
+#endif
     | Label Ident
     | GlobalFunc Ident
     | Section BS.ByteString

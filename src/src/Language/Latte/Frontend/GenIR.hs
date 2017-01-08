@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
@@ -22,7 +23,9 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Sequence as Seq
+#if __GLASGOW_HASKELL__ >= 801
 import GHC.Stack
+#endif
 import qualified Language.Latte.Frontend.AST as AST
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
@@ -66,7 +69,11 @@ data ClassField = ClassField
     }
     deriving Show
 
-type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m, HasCallStack)
+type GIRMonad m = (MonadState GIRState m, MonadReader GIREnv m, MonadIO m
+#if __GLASGOW_HASKELL__ >= 801
+    , HasCallStack
+#endif
+    )
 
 data Variable = Variable
     { _varType :: !AST.Type

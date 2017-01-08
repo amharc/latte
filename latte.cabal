@@ -37,13 +37,15 @@ library
                        Language.Latte.Backend.Stringify
                        Language.Latte.Backend.Peephole
                        Text.Parsec.TokenMod
-  build-depends:       base >= 4.9 && < 5
+  build-depends:       base >= 4.8 && < 5
                      , bytestring >= 0.10 && < 1.0
                      , lens >= 4.14 && < 5.0
                      , parsec >= 3.1 && < 4.0
                      , pretty >= 1.1 && < 2.0
                      , mtl >= 2.2 && < 3.0
                      , containers >= 0.5 && < 1.0
+                     , semigroups >= 0.18 && < 1.0
+                     , transformers >= 0.4 && < 1.0
   default-language:    Haskell2010
   ghc-options:         -Wall
 

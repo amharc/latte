@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Middleend.DeadCodeElimination (opt, LiveVariables(..)) where
 
@@ -55,8 +56,13 @@ runBlock liveMap block = liftIO $ do
         | otherwise = ((item & instrResult .~ Nothing) Seq.<| acc, step live item)
 
 instance DAE.DAE LiveVariables where
+#if __GLASGOW_HASKELL__ >= 801
     direction = DAE.DAEBackward
     postProcess = DAE.DAEMerge
+#else
+    direction _ = DAE.DAEBackward
+    postProcess _ = DAE.DAEMerge
+#endif
     stepInstruction = step
     stepPhiBranch = stepSimple
     stepPhiTarget (LiveVariables live) phis = LiveVariables $ foldr Set.delete live (phis ^.. folded . names)

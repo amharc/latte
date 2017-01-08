@@ -1,8 +1,11 @@
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ >= 801
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeApplications #-}
+#endif
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Language.Latte.Middleend.DataflowAnalysisEngine (DAEDirection(..), DAEPostProcess(..), DAE(..), runDAE, runDAEBlocks, stepPhiSource) where
@@ -13,6 +16,9 @@ import Control.Lens
 import Data.Foldable
 import Data.IORef
 import qualified Data.Map as Map
+#if __GLASGOW_HASKELL__ < 801
+import Data.Proxy
+#endif
 import Language.Latte.Middleend.IR
 import Language.Latte.Middleend.Monad
 
@@ -21,10 +27,17 @@ data DAEDirection = DAEForward | DAEBackward
 data DAEPostProcess = DAEMerge | DAENormal
 
 class (Monoid a, Eq a) => DAE a where
+#if __GLASGOW_HASKELL__ >= 801
     direction :: DAEDirection
 
     postProcess :: DAEPostProcess
     postProcess = DAENormal
+#else
+    direction :: Proxy a -> DAEDirection
+
+    postProcess :: Proxy a -> DAEPostProcess
+    postProcess _ = DAENormal
+#endif
 
     stepInstruction :: a -> Instruction -> a
     stepPhiBranch :: a -> Operand -> a
@@ -53,11 +66,19 @@ runDAEBlocks blocks = preds >>= go (Map.fromList [(block, mempty) | block <- blo
         else
             go cur preds
 
+#if __GLASGOW_HASKELL__ >= 801
     order = case direction @a of
+#else
+    order = case direction (Proxy :: Proxy a) of
+#endif
         DAEForward -> blocks
         DAEBackward -> reverse blocks
 
+#if __GLASGOW_HASKELL__ >= 801
     preds = case direction @a of
+#else
+    preds = case direction (Proxy :: Proxy a) of
+#endif
         DAEForward -> predecessors blocks 
         DAEBackward -> Map.fromList <$> forM blocks (\block -> (block,) <$> successors block)
 
@@ -75,7 +96,11 @@ iteration preds order prev = liftIO $ foldlM addBlock prev order
 
         let init = foldMap (prev Map.!) (preds Map.! block)
 
+#if __GLASGOW_HASKELL__ >= 801
         case direction @a of
+#else
+        case direction (Proxy :: Proxy a) of
+#endif
             DAEForward -> do
                 let first = init & flip stepPhiTarget phis
                                  & flip (foldl stepInstruction) body
@@ -88,6 +113,10 @@ iteration preds order prev = liftIO $ foldlM addBlock prev order
                              & flip stepPhiTarget phis
 
 post :: forall a. DAE a => Map.Map Block [Block] -> Map.Map Block a -> Map.Map Block a
+#if __GLASGOW_HASKELL__ >= 801
 post preds prev = case postProcess @a of
+#else
+post preds prev = case postProcess (Proxy :: Proxy a) of
+#endif
     DAENormal -> prev
     DAEMerge -> imap (\block _ -> foldMap (prev Map.!) (preds Map.! block)) prev
